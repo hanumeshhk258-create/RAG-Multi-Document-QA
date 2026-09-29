@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Multi-Document Question Answering System</title>
+    <!-- Google Fonts: Inter & Fira Code -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Chart.js for RAG Analytics Dashboard -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-layout">
+        <!-- LEFT SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon">📚</span>
+                    <div class="logo-text">
+                        <h2>RAG System</h2>
+                        <span class="version-tag">Smart Filtering QA</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PDF Upload Section -->
+            <div class="sidebar-section">
+                <h3 class="section-title">Upload Documents</h3>
+                <div class="drop-zone" id="drop-zone">
+                    <input type="file" id="file-input" multiple accept=".pdf" class="file-input">
+                    <div class="drop-zone-content">
+                        <span class="upload-icon">📤</span>
+                        <p class="drop-text">Drag & drop PDFs here or <span class="browse-link">browse</span></p>
+                        <span class="file-hint">Upload 1, 2, 5, 10+ PDFs simultaneously</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Document List & Smart Selection Section -->
+            <div class="sidebar-section files-section">
+                <div class="section-header">
+                    <h3 class="section-title">Uploaded Documents</h3>
+                    <span class="file-count" id="file-count-badge">0 documents</span>
+                </div>
+
+                <!-- Selection Controls Bar -->
+                <div class="selection-control-bar" id="selection-control-bar">
+                    <div class="selection-toggle-row">
+                        <label class="checkbox-container" id="select-all-label">
+                            <input type="checkbox" id="select-all-checkbox" checked>
+                            <span class="custom-checkmark"></span>
+                            <span class="checkbox-text">Select All Documents</span>
+                        </label>
+                        <span class="selection-count-badge" id="selected-doc-count">0 of 0 selected</span>
+                    </div>
+                    <div class="selection-buttons-row">
+                        <button type="button" id="btn-select-all" class="btn-subtle" title="Select all uploaded documents">
+                            Select All
+                        </button>
+                        <button type="button" id="btn-clear-selection" class="btn-subtle" title="Clear document selection">
+                            Clear Selection
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Document List Container -->
+                <div class="file-list-container">
+                    <ul class="file-list" id="file-list">
+                        <li class="empty-list-item">No documents uploaded yet.</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Fast Document Search & Analytics Buttons -->
+            <div class="sidebar-section search-section">
+                <button type="button" id="btn-open-search" class="btn btn-search-trigger" title="Fast hybrid search across selected documents without calling LLM">
+                    <span class="btn-icon">🔍</span> <span>Search Documents</span>
+                </button>
+                <button type="button" id="btn-sidebar-analytics" class="btn btn-analytics-trigger-sidebar" title="Open RAG Analytics & Evaluation Dashboard">
+                    <span class="btn-icon">📊</span> <span>Analytics Dashboard</span>
+                </button>
+            </div>
+
+            <!-- Recent Questions History -->
+            <div class="sidebar-section recent-questions-section" id="recent-questions-section">
+                <div class="section-header">
+                    <h2>Recent Questions</h2>
+                    <button type="button" id="btn-clear-recent" class="btn-clear-recent" title="Clear query history">Clear</button>
+                </div>
+                <div class="recent-questions-list-wrapper">
+                    <ul id="recent-questions-list" class="recent-questions-list">
+                        <li class="empty-recent-item">No recent questions yet.</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Indexing Actions -->
+            <div class="sidebar-section actions-section">
+                <button id="btn-index" class="btn btn-primary" disabled>
+                    <span class="btn-icon">⚡</span> <span id="btn-index-text">Index Documents</span>
+                </button>
+                <div class="action-btn-row">
+                    <button id="btn-rebuild" class="btn btn-secondary btn-sm" title="Re-extract and rebuild FAISS vector index">
+                        <span>🔄</span> Rebuild Index
+                    </button>
+                    <button id="btn-reset" class="btn btn-danger btn-sm" title="Clear all uploaded documents and reset index">
+                        <span>🧹</span> Clear All
+                    </button>
+                </div>
+            </div>
+
+            <!-- System Status Panel -->
+            <div class="sidebar-footer">
+                <div class="status-card">
+                    <div class="status-header-row">
+                        <span class="status-label">System Status</span>
+                        <span class="status-badge ready" id="system-status">
+                            <span class="status-dot"></span> <span id="status-text">Checking...</span>
+                        </span>
+                    </div>
+                    
+                    <div class="status-grid">
+                        <div class="stat-box">
+                            <span class="stat-val" id="stat-docs">0</span>
+                            <span class="stat-lbl">Documents</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-val stat-val-indexed" id="stat-indexed">0</span>
+                            <span class="stat-lbl">Indexed</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-val stat-val-pending" id="stat-pending">0</span>
+                            <span class="stat-lbl">Pending</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-val" id="stat-pages">0</span>
+                            <span class="stat-lbl">Pages</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-val" id="stat-chunks">0</span>
+                            <span class="stat-lbl">Chunks</span>
+                        </div>
+                    </div>
+
+                    <div class="status-meta">
+                        <div class="meta-row">
+                            <span class="meta-key">Vector Index:</span>
+                            <span class="meta-val highlight">FAISS ✓</span>
+                        </div>
+                        <div class="meta-row">
+                            <span class="meta-key">AI Model:</span>
+                            <span class="meta-val" id="stat-model">Gemini</span>
+                        </div>
+                        <div class="meta-row">
+                            <span class="meta-key">Active Selection:</span>
+                            <span class="meta-val highlight" id="stat-selected-summary">0 selected</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="chat-header">
+                <div class="header-left">
+                    <div class="header-title-row">
+                        <h1 id="main-header-title">RAG Document Assistant</h1>
+                        <span class="memory-badge" id="memory-badge" title="Conversational Memory is Active (Follow-ups enabled)">
+                            <span class="memory-pulse-dot"></span> Conversation Memory: ON
+                        </span>
+                    </div>
+                    <p class="header-subtitle" id="main-header-subtitle">Multi-document search, smart filtering & conversational follow-ups</p>
+                    <div class="pipeline-status-pills" id="pipeline-status-pills">
+                        <span class="status-pill status-pill-hybrid" id="pill-hybrid"><span class="pill-dot">●</span> Hybrid Search</span>
+                        <span class="status-pill status-pill-faiss" id="pill-faiss"><span class="pill-dot">●</span> FAISS Dense</span>
+                        <span class="status-pill status-pill-bm25" id="pill-bm25"><span class="pill-dot">●</span> BM25 Sparse</span>
+                        <span class="status-pill status-pill-reranker" id="pill-reranker"><span class="pill-dot">●</span> Cross-Encoder</span>
+                        <span class="status-pill status-pill-multiquery" id="pill-multiquery"><span class="pill-dot">●</span> Multi-Query</span>
+                        <span class="status-pill status-pill-decomposition" id="pill-decomposition"><span class="pill-dot">●</span> Query Decomposition</span>
+                        <span class="status-pill status-pill-adaptive" id="pill-adaptive"><span class="pill-dot">●</span> Adaptive Retrieval</span>
+                        <span class="status-pill status-pill-compression" id="pill-compression"><span class="pill-dot">●</span> Contextual Compression</span>
+                        <span class="status-pill status-pill-table" id="pill-table"><span class="pill-dot">●</span> Table Extraction</span>
+                        <span class="status-pill status-pill-evaluation" id="pill-evaluation"><span class="pill-dot">●</span> Answer Evaluation</span>
+                        <span class="status-pill status-pill-correction" id="pill-correction"><span class="pill-dot">●</span> Answer Correction</span>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <button id="btn-toggle-view" class="btn btn-analytics-trigger btn-sm" title="Toggle between Chat and Analytics Dashboard">
+                        <span id="toggle-view-icon">📊</span> <span id="toggle-view-text">Analytics</span>
+                    </button>
+                    <button id="btn-new-chat" class="btn btn-secondary btn-sm" title="Start a fresh conversation session">
+                        <span>➕</span> New Chat
+                    </button>
+                    <button id="btn-clear-chat" class="btn btn-ghost btn-sm" title="Clear Chat History">
+                        <span>🧹</span> Clear Chat
+                    </button>
+                </div>
+            </header>
+
+            <!-- Alerts Banner -->
+            <div id="alert-banner" class="alert-banner hidden"></div>
+
+            <!-- CHAT VIEW SECTION -->
+            <div id="chat-view-section" class="chat-view-section">
+                <!-- Chat Messages Container -->
+                <div class="chat-container" id="chat-container">
+                    <div class="chat-messages" id="chat-messages">
+                        <!-- Welcome Placeholder Message -->
+                        <div class="message system-message" id="welcome-message">
+                            <div class="message-avatar">🤖</div>
+                            <div class="message-content">
+                                <h3>Welcome to Multi-Document RAG Assistant</h3>
+                                <p>Ask fast, accurate, and document-grounded questions across your chosen PDFs.</p>
+                                <ol>
+                                    <li><strong>Upload & Index PDFs:</strong> Upload PDFs in the sidebar and click <strong>⚡ Index Documents</strong>.</li>
+                                    <li><strong>Smart Document Filtering:</strong> Check/uncheck documents to restrict search scope to specific files only.</li>
+                                    <li><strong>Ask Questions & Terms:</strong> Ask full questions, comparisons (e.g. <em>"Compare SQL and Python"</em>), or one-word concepts (e.g. <em>"JOIN"</em>, <em>"Primary Key"</em>).</li>
+                                    <li><strong>Analytics & Evaluation:</strong> Click <strong>📊 Analytics</strong> in the header to view performance metrics, grounding telemetry, and history.</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Searching / Thinking Indicator -->
+                    <div class="thinking-indicator hidden" id="thinking-indicator">
+                        <div class="message-avatar">🤖</div>
+                        <div class="thinking-bubble">
+                            <span class="thinking-text" id="thinking-text">🤖 Searching documents...</span>
+                            <div class="typing-dots">
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Input Area -->
+                <div class="chat-input-wrapper">
+                    <form id="chat-form" class="chat-form">
+                        <div class="input-container">
+                            <textarea 
+                                id="user-input" 
+                                rows="1" 
+                                placeholder="Ask a question about your selected documents..." 
+                                required
+                            ></textarea>
+                            <button type="submit" id="btn-send" class="btn-send" title="Send Question">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                            </button>
+                        </div>
+                    </form>
+                    <div class="input-footer">
+                        <span>Press <strong>Enter</strong> to send &bull; <strong>Shift + Enter</strong> for a new line &bull; Strict document grounding enabled</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ANALYTICS & EVALUATION DASHBOARD VIEW SECTION -->
+            <div id="analytics-view-section" class="analytics-view-section hidden">
+                <div class="analytics-container">
+                    <!-- Dashboard Actions Bar -->
+                    <div class="analytics-actions-bar">
+                        <div class="analytics-title-group">
+                            <h2>📊 Performance & Evaluation Overview</h2>
+                            <span class="analytics-sync-badge" id="analytics-last-synced">Updated: Live</span>
+                        </div>
+                        <div class="analytics-controls">
+                            <button type="button" id="btn-export-analytics" class="btn btn-primary btn-sm" title="Download analytics data as CSV">
+                                <span>📥</span> Export CSV
+                            </button>
+                            <button type="button" id="btn-refresh-analytics" class="btn btn-secondary btn-sm" title="Refresh metrics and charts">
+                                <span>🔄</span> Refresh
+                            </button>
+                            <button type="button" id="btn-clear-analytics-data" class="btn btn-danger btn-sm" title="Reset analytics database">
+                                <span>🧹</span> Clear Data
+                            </button>
+                            <button type="button" id="btn-switch-to-chat" class="btn btn-ghost btn-sm" title="Return to Chat Interface">
+                                <span>💬</span> Back to Chat
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Document & Index Statistics Strip -->
+                    <div class="analytics-doc-stats-strip">
+                        <div class="doc-stat-pill">
+                            <span class="doc-stat-icon">📚</span>
+                            <span class="doc-stat-title">Documents:</span>
+                            <strong id="stat-dash-docs">0</strong>
+                        </div>
+                        <div class="doc-stat-pill">
+                            <span class="doc-stat-icon">📄</span>
+                            <span class="doc-stat-title">Total Pages:</span>
+                            <strong id="stat-dash-pages">0</strong>
+                        </div>
+                        <div class="doc-stat-pill">
+                            <span class="doc-stat-icon">🧩</span>
+                            <span class="doc-stat-title">Indexed Chunks:</span>
+                            <strong id="stat-dash-chunks">0</strong>
+                        </div>
+                        <div class="doc-stat-pill">
+                            <span class="doc-stat-icon">⚡</span>
+                            <span class="doc-stat-title">Vectorstore:</span>
+                            <strong id="stat-dash-vs-status" class="text-success">Active</strong>
+                        </div>
+                        <div class="doc-stat-pill doc-stat-pill-action">
+                            <button type="button" id="btn-run-evaluation" class="btn btn-primary btn-sm" style="padding: 4px 12px; font-size: 11px;">
+                                <span>▶</span> Run Evaluation Benchmark
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Benchmark Evaluation Panel (Collapsible / Dynamic) -->
+                    <div class="analytics-evaluation-panel" id="analytics-evaluation-panel">
+                        <div class="eval-panel-header">
+                            <div class="eval-header-title">
+                                <span>🧪</span> <strong>RAG Evaluation Benchmark (20 Test Queries)</strong>
+                                <span class="eval-badge" id="eval-status-badge">Ready</span>
+                            </div>
+                            <span class="eval-timestamp" id="eval-timestamp">Last Run: Not executed yet</span>
+                        </div>
+                        <div class="eval-metrics-row">
+                            <div class="eval-metric-box">
+                                <span class="eval-m-label">Hit@1 Precision</span>
+                                <span class="eval-m-val" id="eval-hit1">--</span>
+                            </div>
+                            <div class="eval-metric-box">
+                                <span class="eval-m-label">Hit@3 Recall</span>
+                                <span class="eval-m-val" id="eval-hit3">--</span>
+                            </div>
+                            <div class="eval-metric-box">
+                                <span class="eval-m-label">Retrieval Precision</span>
+                                <span class="eval-m-val" id="eval-precision">--</span>
+                            </div>
+                            <div class="eval-metric-box">
+                                <span class="eval-m-label">Retrieval Recall</span>
+                                <span class="eval-m-val" id="eval-recall">--</span>
+                            </div>
+                            <div class="eval-metric-box">
+                                <span class="eval-m-label">Source Accuracy</span>
+                                <span class="eval-m-val" id="eval-source-acc">--</span>
+                            </div>
+                            <div class="eval-metric-box">
+                                <span class="eval-m-label">Page Accuracy</span>
+                                <span class="eval-m-val" id="eval-page-acc">--</span>
+                            </div>
+                            <div class="eval-metric-box">
+                                <span class="eval-m-label">OOD Refusal Rate</span>
+                                <span class="eval-m-val" id="eval-ood-refusal">--</span>
+                            </div>
+                            <div class="eval-metric-box">
+                                <span class="eval-m-label">Avg Groundedness</span>
+                                <span class="eval-m-val" id="eval-groundedness">--</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 12 SUMMARY & MONITORING CARDS -->
+                    <div class="analytics-summary-grid">
+                        <div class="analytics-card stat-card-purple">
+                            <div class="card-icon">🔢</div>
+                            <div class="card-content">
+                                <span class="card-label">Total Questions</span>
+                                <span class="card-value" id="stat-total-questions">0</span>
+                                <span class="card-subtext" id="stat-cache-rate">0% Cache Hit Rate</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-blue">
+                            <div class="card-icon">⚡</div>
+                            <div class="card-content">
+                                <span class="card-label">Avg Response Time</span>
+                                <span class="card-value" id="stat-avg-resp-time">0.00s</span>
+                                <span class="card-subtext" id="stat-retrieval-split">Ret: 0.0s | Gen: 0.0s</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-teal">
+                            <div class="card-icon">🎯</div>
+                            <div class="card-content">
+                                <span class="card-label">Avg Retrieval Relevance</span>
+                                <span class="card-value" id="stat-avg-relevance">0.0%</span>
+                                <span class="card-subtext">Cross-Encoder precision</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-emerald">
+                            <div class="card-icon">🛡️</div>
+                            <div class="card-content">
+                                <span class="card-label">Avg Groundedness</span>
+                                <span class="card-value" id="stat-avg-groundedness">0.0%</span>
+                                <span class="card-subtext">Chunk source alignment</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-cyan">
+                            <div class="card-icon">🧠</div>
+                            <div class="card-content">
+                                <span class="card-label">Avg Faithfulness</span>
+                                <span class="card-value" id="stat-avg-faithfulness">0.0%</span>
+                                <span class="card-subtext">Factual consistency</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-indigo">
+                            <div class="card-icon">📑</div>
+                            <div class="card-content">
+                                <span class="card-label">Avg Source Coverage</span>
+                                <span class="card-value" id="stat-avg-coverage">0.0%</span>
+                                <span class="card-subtext">Extracted citation density</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-green">
+                            <div class="card-icon">✅</div>
+                            <div class="card-content">
+                                <span class="card-label">Verified Answers</span>
+                                <span class="card-value" id="stat-verified-count">0</span>
+                                <span class="card-subtext">100% supported claims</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-amber">
+                            <div class="card-icon">⚠️</div>
+                            <div class="card-content">
+                                <span class="card-label">Unsupported Answers</span>
+                                <span class="card-value" id="stat-unsupported-count">0</span>
+                                <span class="card-subtext">Strict fallback triggered</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-pink">
+                            <div class="card-icon">🔁</div>
+                            <div class="card-content">
+                                <span class="card-label">Avg Retry Count</span>
+                                <span class="card-value" id="stat-avg-retries">0.00</span>
+                                <span class="card-subtext">Adaptive query reformulations</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-emerald">
+                            <div class="card-icon">👍</div>
+                            <div class="card-content">
+                                <span class="card-label">User Satisfaction</span>
+                                <span class="card-value" id="stat-user-satisfaction">100.0%</span>
+                                <span class="card-subtext" id="stat-feedback-detail">👍 0 Helpful &bull; 👎 0 Unhelpful</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-blue">
+                            <div class="card-icon">⏱️</div>
+                            <div class="card-content">
+                                <span class="card-label">Latency Range (Min / Max)</span>
+                                <span class="card-value" id="stat-latency-range">0.0s - 0.0s</span>
+                                <span class="card-subtext" id="stat-latency-stages">Ret: 0ms | Rerank: 0ms | Gen: 0s</span>
+                            </div>
+                        </div>
+
+                        <div class="analytics-card stat-card-purple">
+                            <div class="card-icon">📊</div>
+                            <div class="card-content">
+                                <span class="card-label">Confidence Profile</span>
+                                <span class="card-value" id="stat-conf-profile">0 High</span>
+                                <span class="card-subtext" id="stat-conf-detail">High: 0 | Med: 0 | Low: 0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 5 INTERACTIVE CHARTS SECTION -->
+                    <div class="analytics-charts-grid">
+                        <!-- Chart A: Response Time -->
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>⚡ Response Time per Question</h3>
+                                <span class="chart-badge">Latency (seconds)</span>
+                            </div>
+                            <div class="chart-wrapper">
+                                <canvas id="chart-response-time"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Chart B: Retrieval Relevance -->
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>🎯 Retrieval Relevance Score</h3>
+                                <span class="chart-badge">Score (0-100%)</span>
+                            </div>
+                            <div class="chart-wrapper">
+                                <canvas id="chart-retrieval-relevance"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Chart C: Groundedness & Faithfulness -->
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>🛡️ Groundedness vs Faithfulness</h3>
+                                <span class="chart-badge">Comparison (%)</span>
+                            </div>
+                            <div class="chart-wrapper">
+                                <canvas id="chart-grounding-faithfulness"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Chart D: Verified vs Unsupported Status -->
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>⚖️ Answer Verification Distribution</h3>
+                                <span class="chart-badge">Distribution</span>
+                            </div>
+                            <div class="chart-wrapper">
+                                <canvas id="chart-status-distribution"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Chart E: Document Usage Frequency -->
+                        <div class="chart-card chart-card-full-width">
+                            <div class="chart-header">
+                                <h3>📚 Top Referenced Documents</h3>
+                                <span class="chart-badge">Frequency of source citations</span>
+                            </div>
+                            <div class="chart-wrapper">
+                                <canvas id="chart-document-usage"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- QUESTION HISTORY AUDIT TABLE SECTION -->
+                    <div class="analytics-table-section">
+                        <div class="table-section-header">
+                            <div class="table-title-wrap">
+                                <h3>📜 Question Evaluation History</h3>
+                                <span class="table-count-badge" id="table-row-count">0 questions recorded</span>
+                            </div>
+                            <div class="table-actions">
+                                <div class="table-search-box">
+                                    <span class="search-icon">🔍</span>
+                                    <input type="text" id="analytics-table-filter" placeholder="Search questions, status, sources..." />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="table-container">
+                            <table class="analytics-table" id="analytics-data-table">
+                                <thead>
+                                    <tr>
+                                        <th data-sort="id" class="sortable">ID <span>↕</span></th>
+                                        <th data-sort="question" class="sortable">Question <span>↕</span></th>
+                                        <th data-sort="response_time" class="sortable">Time <span>↕</span></th>
+                                        <th data-sort="relevance" class="sortable">Relevance <span>↕</span></th>
+                                        <th data-sort="groundedness" class="sortable">Groundedness <span>↕</span></th>
+                                        <th data-sort="faithfulness" class="sortable">Faithfulness <span>↕</span></th>
+                                        <th data-sort="source_coverage" class="sortable">Coverage <span>↕</span></th>
+                                        <th data-sort="status" class="sortable">Status <span>↕</span></th>
+                                        <th>Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="analytics-table-body">
+                                    <tr>
+                                        <td colspan="9" class="table-empty-cell">No analytics data recorded yet. Ask a question in chat to view real-time metrics!</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- QUESTION DETAIL MODAL / DEEP DIVE INSPECTOR -->
+    <div id="question-detail-modal" class="question-detail-modal hidden">
+        <div class="question-modal-backdrop" id="question-detail-backdrop" onclick="window.closeQuestionDetail(event)"></div>
+        <div class="question-modal-content">
+            <div class="question-modal-header">
+                <div class="modal-title-wrap">
+                    <span class="modal-badge-q" id="detail-q-badge">Q#1</span>
+                    <h3 id="detail-question-title">Question Detail</h3>
+                    <span class="status-badge verified" id="detail-status-badge">VERIFIED</span>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-detail-modal" onclick="window.closeQuestionDetail(event)" title="Close inspector">&times;</button>
+            </div>
+            
+            <div class="question-modal-body" id="detail-modal-body">
+                <!-- Dynamically filled by app.js -->
+            </div>
+
+            <div class="question-modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-close-detail-bottom" onclick="window.closeQuestionDetail(event)">Close Details</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EVIDENCE VIEWER / SOURCE EVIDENCE EXPLORER MODAL -->
+    <div id="source-modal" class="source-modal hidden">
+        <div class="source-modal-backdrop" id="modal-backdrop" onclick="window.closeEvidenceViewer(event)"></div>
+        <div class="source-modal-content">
+            <div class="source-modal-header">
+                <div class="source-modal-title">
+                    <span class="modal-icon">🔎</span>
+                    <div>
+                        <div class="modal-title-row">
+                            <span class="modal-heading-label">EVIDENCE VIEWER</span>
+                            <span class="modal-rel-badge" id="modal-rel-badge">🎯 95% relevant</span>
+                        </div>
+                        <h3 id="modal-doc-name">Document.pdf</h3>
+                        <span class="modal-page-badge" id="modal-page-num">Page 1</span>
+                    </div>
+                </div>
+                <button class="btn-close-modal" id="btn-close-modal" onclick="window.closeEvidenceViewer(event)" title="Close Evidence Viewer">&times;</button>
+            </div>
+            
+            <div class="source-modal-body">
+                <!-- EVIDENCE METADATA GRID -->
+                <div class="evidence-meta-grid" id="modal-evidence-meta-grid">
+                    <div class="ev-meta-item">
+                        <span class="ev-meta-label">Chunk ID:</span>
+                        <span class="ev-meta-val" id="modal-chunk-id">doc_p1_c1</span>
+                    </div>
+                    <div class="ev-meta-item">
+                        <span class="ev-meta-label">Retrieval Score:</span>
+                        <span class="ev-meta-val" id="modal-retrieval-score">0.92</span>
+                    </div>
+                    <div class="ev-meta-item">
+                        <span class="ev-meta-label">Reranking Score:</span>
+                        <span class="ev-meta-val" id="modal-rerank-score">0.96 (Cross-Encoder)</span>
+                    </div>
+                    <div class="ev-meta-item">
+                        <span class="ev-meta-label">Retrieval Method:</span>
+                        <span class="ev-meta-val" id="modal-retrieval-method">Hybrid Search</span>
+                    </div>
+                    <div class="ev-meta-item">
+                        <span class="ev-meta-label">Compression:</span>
+                        <span class="ev-meta-val" id="modal-compression-status">Full Extracted Text</span>
+                    </div>
+                    <div class="ev-meta-item">
+                        <span class="ev-meta-label">Evidence Status:</span>
+                        <span class="ev-meta-val ev-status-used" id="modal-evidence-status">✓ Used in Final Answer</span>
+                    </div>
+                </div>
+
+                <div class="preview-label-row">
+                    <span class="preview-label">Retrieved Evidence</span>
+                    <a id="modal-pdf-link" href="#" target="_blank" rel="noopener noreferrer" class="modal-pdf-link" title="Open PDF in browser at specific page">
+                        <span>🔍</span> View PDF at Page
+                    </a>
+                </div>
+                
+                <div class="source-preview-text" id="modal-preview-text"></div>
+                <div class="evidence-table-preview hidden" id="modal-table-preview"></div>
+            </div>
+
+            <div class="source-modal-footer">
+                <a id="modal-footer-pdf-btn" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" title="Open original PDF at this page in new tab">
+                    <span>🔍</span> View PDF at Page
+                </a>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-excerpt" onclick="window.copyEvidenceText()">
+                    <span>📋</span> Copy Evidence
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-close-modal-bottom" onclick="window.closeEvidenceViewer(event)">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- DOCUMENT SEARCH MODAL -->
+    <div id="search-modal" class="search-modal hidden">
+        <div class="search-modal-backdrop" id="search-modal-backdrop"></div>
+        <div class="search-modal-content">
+            <div class="search-modal-header">
+                <div class="search-modal-title">
+                    <span class="modal-icon">🔍</span>
+                    <div>
+                        <h3>Search Documents</h3>
+                        <span class="search-scope-badge" id="search-scope-badge">Searching in 0 selected documents</span>
+                    </div>
+                </div>
+                <button class="btn-close-modal" id="btn-close-search-modal" title="Close Search">&times;</button>
+            </div>
+            <div class="search-modal-body">
+                <div class="search-input-group">
+                    <span class="search-input-icon">🔍</span>
+                    <input 
+                        type="text" 
+                        id="doc-search-input" 
+                        class="doc-search-input" 
+                        placeholder="Search uploaded documents... (e.g. normalization, DML, ACID)"
+                        autocomplete="off"
+                    />
+                    <button type="button" id="btn-clear-doc-search" class="btn-clear-search hidden" title="Clear search text">&times;</button>
+                </div>
+                <div class="search-quick-chips">
+                    <span class="chips-label">Quick suggestions:</span>
+                    <button type="button" class="search-chip" data-term="DML">DML</button>
+                    <button type="button" class="search-chip" data-term="ACID">ACID</button>
+                    <button type="button" class="search-chip" data-term="normalization">normalization</button>
+                    <button type="button" class="search-chip" data-term="JOIN">JOIN</button>
+                    <button type="button" class="search-chip" data-term="Python">Python</button>
+                </div>
+                <div class="search-results-meta" id="search-results-meta">
+                    <span id="search-status-text">Type a query to search fast across indexed chunks.</span>
+                </div>
+                <div class="search-results-container" id="search-results-container">
+                    <div class="search-empty-state" id="search-empty-state">
+                        <span class="empty-icon">💡</span>
+                        <p>Search indexed documents with zero Gemini LLM latency.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DELETE CONFIRMATION MODAL (Requirement 5) -->
+    <div id="delete-confirm-modal" class="modal-overlay hidden">
+        <div class="modal-backdrop" id="delete-modal-backdrop"></div>
+        <div class="modal-dialog delete-dialog">
+            <div class="modal-dialog-header">
+                <div class="modal-dialog-title-wrap">
+                    <span class="modal-dialog-icon">🗑️</span>
+                    <h3>Remove this document?</h3>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-delete-modal" title="Cancel">&times;</button>
+            </div>
+            <div class="modal-dialog-body">
+                <p class="modal-intro-text">Are you sure you want to remove this document from the system?</p>
+                <div class="delete-doc-preview">
+                    <span class="doc-icon">📄</span>
+                    <div class="doc-info-text">
+                        <strong id="delete-modal-docname">Document.pdf</strong>
+                        <span id="delete-modal-docmeta" class="doc-meta-sub">ID: doc_12345678</span>
+                    </div>
+                </div>
+                <p class="delete-warning-text">⚠️ This will permanently remove the physical file, all extracted chunks, FAISS vector embeddings, BM25 tokens, and cache entries. It will no longer participate in searches or citations.</p>
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-delete">Cancel</button>
+                <button type="button" class="btn btn-danger btn-sm" id="btn-confirm-delete">Remove</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- DUPLICATE UPLOAD / REPLACE MODAL (Requirements 9 & 10) -->
+    <div id="duplicate-upload-modal" class="modal-overlay hidden">
+        <div class="modal-backdrop" id="duplicate-modal-backdrop"></div>
+        <div class="modal-dialog duplicate-dialog">
+            <div class="modal-dialog-header">
+                <div class="modal-dialog-title-wrap">
+                    <span class="modal-dialog-icon">⚠️</span>
+                    <h3>Document Already Uploaded</h3>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-duplicate-modal" title="Close">&times;</button>
+            </div>
+            <div class="modal-dialog-body">
+                <p class="modal-intro-text" id="duplicate-modal-message">This document is already uploaded.</p>
+                <div class="duplicate-doc-preview">
+                    <span class="doc-icon">📄</span>
+                    <div class="doc-info-text">
+                        <strong id="duplicate-modal-docname">Document.pdf</strong>
+                        <span id="duplicate-modal-status" class="doc-meta-sub">Status: Ready (Indexed)</span>
+                    </div>
+                </div>
+                <p class="duplicate-subtext">Would you like to keep the existing document or replace it (which will re-process chunks and rebuild embeddings)?</p>
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-duplicate-keep">Keep Existing</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-duplicate-replace">Replace Document</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

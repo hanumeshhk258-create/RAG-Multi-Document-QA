@@ -1,0 +1,36 @@
+# Environment file (contains secrets)
+.env
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# FAISS Vector Index Storage
+vectorstore/
+!vectorstore/.gitkeep
+
+# Streamlit config/cache
+.streamlit/
+
+# Documents storage
+documents/*
+!documents/.gitkeep
+
+# Database & test cache
+analytics.db
+*.db
+*.sqlite
+*.sqlite3
+test_vectorstore/
+
+# OS specific files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,162 @@
+[
+  {
+    "id": "EVAL-01",
+    "question": "What are the ACID properties in database management systems?",
+    "expected_keywords": ["atomicity", "consistency", "isolation", "durability", "transaction"],
+    "expected_source": "Database_Management_Systems.pdf",
+    "expected_page": 1,
+    "type": "factual"
+  },
+  {
+    "id": "EVAL-02",
+    "question": "What is Atomicity and how does it protect transactions?",
+    "expected_keywords": ["atomicity", "all or nothing", "transaction", "rollback", "commit"],
+    "expected_source": "Database_Management_Systems.pdf",
+    "expected_page": 1,
+    "type": "definition"
+  },
+  {
+    "id": "EVAL-03",
+    "question": "Explain database normalization and the difference between 1NF, 2NF, and 3NF.",
+    "expected_keywords": ["normalization", "redundancy", "1nf", "2nf", "3nf", "functional dependency"],
+    "expected_source": "Database_Management_Systems.pdf",
+    "expected_page": 2,
+    "type": "comparison"
+  },
+  {
+    "id": "EVAL-04",
+    "question": "What is a Primary Key and how does it differ from a Foreign Key?",
+    "expected_keywords": ["primary key", "foreign key", "uniquely identifies", "referential integrity"],
+    "expected_source": "Database_Management_Systems.pdf",
+    "expected_page": 2,
+    "type": "comparison"
+  },
+  {
+    "id": "EVAL-05",
+    "question": "What are the common types of SQL JOIN operations?",
+    "expected_keywords": ["inner join", "left join", "right join", "full outer join", "cross join"],
+    "expected_source": "SQL_Reference_Guide.pdf",
+    "expected_page": 1,
+    "type": "factual"
+  },
+  {
+    "id": "EVAL-06",
+    "question": "What is the difference between DML and DDL commands in SQL?",
+    "expected_keywords": ["dml", "ddl", "select", "insert", "update", "create", "alter", "drop"],
+    "expected_source": "SQL_Reference_Guide.pdf",
+    "expected_page": 2,
+    "type": "comparison"
+  },
+  {
+    "id": "EVAL-07",
+    "question": "How does GROUP BY work with HAVING clause in SQL queries?",
+    "expected_keywords": ["group by", "having", "aggregate", "filter", "where"],
+    "expected_source": "SQL_Reference_Guide.pdf",
+    "expected_page": 3,
+    "type": "factual"
+  },
+  {
+    "id": "EVAL-08",
+    "question": "What are Python list comprehensions and how do they compare to traditional loops?",
+    "expected_keywords": ["list comprehension", "concise", "syntax", "loop", "iterable"],
+    "expected_source": "Python_Programming_Cookbook.pdf",
+    "expected_page": 1,
+    "type": "definition"
+  },
+  {
+    "id": "EVAL-09",
+    "question": "Explain the Global Interpreter Lock (GIL) in Python and its impact on multithreading.",
+    "expected_keywords": ["gil", "global interpreter lock", "multithreading", "bytecode", "concurrency"],
+    "expected_source": "Python_Programming_Cookbook.pdf",
+    "expected_page": 3,
+    "type": "factual"
+  },
+  {
+    "id": "EVAL-10",
+    "question": "What is the difference between mutable and immutable data types in Python?",
+    "expected_keywords": ["mutable", "immutable", "list", "tuple", "dict", "string", "modify"],
+    "expected_source": "Python_Programming_Cookbook.pdf",
+    "expected_page": 2,
+    "type": "comparison"
+  },
+  {
+    "id": "EVAL-11",
+    "question": "Compare database transaction isolation levels with Python concurrency mechanisms.",
+    "expected_keywords": ["isolation", "concurrency", "thread", "transaction", "locking"],
+    "expected_source": "Database_Management_Systems.pdf",
+    "expected_page": 1,
+    "type": "multi_document"
+  },
+  {
+    "id": "EVAL-12",
+    "question": "How do SQL index structures relate to Python dictionary hash maps?",
+    "expected_keywords": ["index", "b-tree", "hash", "dictionary", "lookup", "performance"],
+    "expected_source": "SQL_Reference_Guide.pdf",
+    "expected_page": 2,
+    "type": "multi_document"
+  },
+  {
+    "id": "EVAL-13",
+    "question": "What SQL commands are listed in the commands reference table and what are their syntax rules?",
+    "expected_keywords": ["command", "syntax", "select", "table", "description"],
+    "expected_source": "SQL_Reference_Guide.pdf",
+    "expected_page": 2,
+    "type": "table"
+  },
+  {
+    "id": "EVAL-14",
+    "question": "In the normalization process, which normal form addresses transitive dependencies and what preceding condition must be met?",
+    "expected_keywords": ["3nf", "third normal form", "transitive dependency", "2nf", "second normal form"],
+    "expected_source": "Database_Management_Systems.pdf",
+    "expected_page": 2,
+    "type": "multi_hop"
+  },
+  {
+    "id": "EVAL-15",
+    "question": "What are the exact hardware requirements and server rack specifications for running the database cluster?",
+    "expected_keywords": [],
+    "expected_source": null,
+    "expected_page": null,
+    "type": "insufficient_evidence"
+  },
+  {
+    "id": "EVAL-16",
+    "question": "What is the quarterly revenue and dividend payout policy for the company?",
+    "expected_keywords": [],
+    "expected_source": null,
+    "expected_page": null,
+    "type": "insufficient_evidence"
+  },
+  {
+    "id": "EVAL-17",
+    "question": "How do you prepare a traditional Italian Margherita pizza dough?",
+    "expected_keywords": [],
+    "expected_source": null,
+    "expected_page": null,
+    "type": "out_of_scope"
+  },
+  {
+    "id": "EVAL-18",
+    "question": "What are the atmospheric dynamics and surface temperature of Kepler-452b?",
+    "expected_keywords": [],
+    "expected_source": null,
+    "expected_page": null,
+    "type": "out_of_scope"
+  },
+  {
+    "id": "EVAL-19",
+    "question": "What is Boyce-Codd Normal Form (BCNF) and when is it required?",
+    "expected_keywords": ["bcnf", "boyce codd", "normal form", "determinant", "candidate key"],
+    "expected_source": "Database_Management_Systems.pdf",
+    "expected_page": 2,
+    "type": "definition"
+  },
+  {
+    "id": "EVAL-20",
+    "question": "Compare relational database schema design with object-oriented class hierarchies.",
+    "expected_keywords": ["relational", "schema", "table", "class", "object", "inheritance"],
+    "expected_source": "Database_Management_Systems.pdf",
+    "expected_page": 2,
+    "type": "comparison"
+  }
+]
