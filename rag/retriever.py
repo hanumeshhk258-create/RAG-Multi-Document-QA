@@ -2799,44 +2799,86 @@ def retrieve_multi_document_context(
     total_semantic_count = 0
     total_keyword_count = 0
 
-    # Efficient retrieval across queries without redundant Cartesian loop
-    target_filter = target_docs if (selected_documents and len(selected_documents) > 0) else None
-    
-    # Run retrieval across queries_to_run (max 3)
-    for q_branch in queries_to_run[:3]:
-        items, _, _, _, stats = retrieve_relevant_chunks(
-            vectorstore=vectorstore,
-            query=q_branch,
-            top_k=candidate_pool_size,
-            candidate_pool_size=candidate_pool_size,
-            chat_history=chat_history,
-            selected_documents=target_filter,
-            last_context=last_context,
-            skip_query_expansion=True
-        )
-        total_semantic_count += stats.get("semantic_candidates", 0)
-        total_keyword_count += stats.get("keyword_candidates", 0)
+    # Balanced per-document retrieval:
+    # When two or more target documents are selected, querying all documents in a single
+    # global search can lead to "document starvation" — where one document with higher lexical
+    # density or term matches consumes the entire candidate pool, starving other documents.
+    # To ensure balanced comparison, retrieve candidates separately for each target document,
+    # allocating a safe per-document candidate pool while respecting relevance filtering.
+    if len(target_docs) >= 2:
+        per_doc_pool = max(final_k_per_doc * 2, max(4, candidate_pool_size // len(target_docs)))
+        for doc_name in target_docs:
+            for q_branch in queries_to_run[:3]:
+                items, _, _, _, stats = retrieve_relevant_chunks(
+                    vectorstore=vectorstore,
+                    query=q_branch,
+                    top_k=per_doc_pool,
+                    candidate_pool_size=per_doc_pool,
+                    chat_history=chat_history,
+                    selected_documents=[doc_name],
+                    last_context=last_context,
+                    skip_query_expansion=True
+                )
+                total_semantic_count += stats.get("semantic_candidates", 0)
+                total_keyword_count += stats.get("keyword_candidates", 0)
 
-        for item in items:
-            doc = item[0]
-            score = float(item[1])
-            rel_pct = int(item[2])
-            d_name = doc.metadata.get("document") or doc.metadata.get("source", "Document")
-            p_num = doc.metadata.get("page", 1)
-            c_id = doc.metadata.get("chunk_id", "")
-            key = (d_name, p_num, c_id) if c_id else (d_name, p_num, doc.page_content[:60])
+                for item in items:
+                    doc = item[0]
+                    score = float(item[1])
+                    rel_pct = int(item[2]) if len(item) > 2 else int(round(score * 100))
+                    d_name = doc.metadata.get("document") or doc.metadata.get("source", doc_name)
+                    p_num = doc.metadata.get("page", 1)
+                    c_id = doc.metadata.get("chunk_id", "")
+                    key = (d_name, p_num, c_id) if c_id else (d_name, p_num, doc.page_content[:60])
 
-            if key not in seen_keys:
-                seen_keys.add(key)
-                all_retrieved_candidates.append({
-                    "doc": doc,
-                    "document_name": d_name,
-                    "page_number": p_num,
-                    "chunk_id": c_id,
-                    "text": doc.page_content,
-                    "score": score,
-                    "relevance_pct": rel_pct
-                })
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        all_retrieved_candidates.append({
+                            "doc": doc,
+                            "document_name": d_name,
+                            "page_number": p_num,
+                            "chunk_id": c_id,
+                            "text": doc.page_content,
+                            "score": score,
+                            "relevance_pct": rel_pct
+                        })
+    else:
+        # Single document or unconstrained retrieval: preserve existing behavior exactly
+        target_filter = target_docs if (selected_documents and len(selected_documents) > 0) else None
+        for q_branch in queries_to_run[:3]:
+            items, _, _, _, stats = retrieve_relevant_chunks(
+                vectorstore=vectorstore,
+                query=q_branch,
+                top_k=candidate_pool_size,
+                candidate_pool_size=candidate_pool_size,
+                chat_history=chat_history,
+                selected_documents=target_filter,
+                last_context=last_context,
+                skip_query_expansion=True
+            )
+            total_semantic_count += stats.get("semantic_candidates", 0)
+            total_keyword_count += stats.get("keyword_candidates", 0)
+
+            for item in items:
+                doc = item[0]
+                score = float(item[1])
+                rel_pct = int(item[2]) if len(item) > 2 else int(round(score * 100))
+                d_name = doc.metadata.get("document") or doc.metadata.get("source", "Document")
+                p_num = doc.metadata.get("page", 1)
+                c_id = doc.metadata.get("chunk_id", "")
+                key = (d_name, p_num, c_id) if c_id else (d_name, p_num, doc.page_content[:60])
+
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    all_retrieved_candidates.append({
+                        "doc": doc,
+                        "document_name": d_name,
+                        "page_number": p_num,
+                        "chunk_id": c_id,
+                        "text": doc.page_content,
+                        "score": score,
+                        "relevance_pct": rel_pct
+                    })
 
     # Balanced per-document candidate grouping
     per_doc_buckets: Dict[str, List[Dict[str, Any]]] = {}

@@ -4,575 +4,1261 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RAG Multi-Document Question Answering System</title>
+    <!-- Anti-flicker theme initialization -->
+    <script>
+        (function() {
+            try {
+                var savedTheme = localStorage.getItem('rag_theme');
+                var theme = (savedTheme === 'dark' || savedTheme === 'light') ? savedTheme : 'light';
+                document.documentElement.setAttribute('data-theme', theme);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'light');
+            }
+        })();
+    </script>
     <!-- Google Fonts: Inter & Fira Code -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
-    <!-- Chart.js for RAG Analytics Dashboard -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <div class="app-layout">
-        <!-- LEFT SIDEBAR -->
-        <aside class="sidebar">
+    <div class="app-layout" id="app-layout">
+        <!-- COLLAPSIBLE / FLEXIBLE NAVIGATION SIDEBAR -->
+        <aside class="sidebar" id="app-sidebar">
             <div class="sidebar-header">
                 <div class="logo">
                     <span class="logo-icon">📚</span>
                     <div class="logo-text">
-                        <h2>RAG System</h2>
-                        <span class="version-tag">Smart Filtering QA</span>
+                        <h2>RAG Document Assistant</h2>
+                        <span class="version-tag">Document Intelligence</span>
                     </div>
                 </div>
-            </div>
-
-            <!-- PDF Upload Section -->
-            <div class="sidebar-section">
-                <h3 class="section-title">Upload Documents</h3>
-                <div class="drop-zone" id="drop-zone">
-                    <input type="file" id="file-input" multiple accept=".pdf" class="file-input">
-                    <div class="drop-zone-content">
-                        <span class="upload-icon">📤</span>
-                        <p class="drop-text">Drag & drop PDFs here or <span class="browse-link">browse</span></p>
-                        <span class="file-hint">Upload 1, 2, 5, 10+ PDFs simultaneously</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Document List & Smart Selection Section -->
-            <div class="sidebar-section files-section">
-                <div class="section-header">
-                    <h3 class="section-title">Uploaded Documents</h3>
-                    <span class="file-count" id="file-count-badge">0 documents</span>
-                </div>
-
-                <!-- Selection Controls Bar -->
-                <div class="selection-control-bar" id="selection-control-bar">
-                    <div class="selection-toggle-row">
-                        <label class="checkbox-container" id="select-all-label">
-                            <input type="checkbox" id="select-all-checkbox" checked>
-                            <span class="custom-checkmark"></span>
-                            <span class="checkbox-text">Select All Documents</span>
-                        </label>
-                        <span class="selection-count-badge" id="selected-doc-count">0 of 0 selected</span>
-                    </div>
-                    <div class="selection-buttons-row">
-                        <button type="button" id="btn-select-all" class="btn-subtle" title="Select all uploaded documents">
-                            Select All
-                        </button>
-                        <button type="button" id="btn-clear-selection" class="btn-subtle" title="Clear document selection">
-                            Clear Selection
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Document List Container -->
-                <div class="file-list-container">
-                    <ul class="file-list" id="file-list">
-                        <li class="empty-list-item">No documents uploaded yet.</li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Fast Document Search & Analytics Buttons -->
-            <div class="sidebar-section search-section">
-                <button type="button" id="btn-open-search" class="btn btn-search-trigger" title="Fast hybrid search across selected documents without calling LLM">
-                    <span class="btn-icon">🔍</span> <span>Search Documents</span>
-                </button>
-                <button type="button" id="btn-sidebar-analytics" class="btn btn-analytics-trigger-sidebar" title="Open RAG Analytics & Evaluation Dashboard">
-                    <span class="btn-icon">📊</span> <span>Analytics Dashboard</span>
+                <button type="button" id="btn-toggle-sidebar" class="btn-sidebar-collapse" title="Collapse / Expand Sidebar">
+                    <span id="collapse-icon">⇤</span>
                 </button>
             </div>
 
-            <!-- Recent Questions History -->
-            <div class="sidebar-section recent-questions-section" id="recent-questions-section">
-                <div class="section-header">
-                    <h2>Recent Questions</h2>
-                    <button type="button" id="btn-clear-recent" class="btn-clear-recent" title="Clear query history">Clear</button>
-                </div>
-                <div class="recent-questions-list-wrapper">
-                    <ul id="recent-questions-list" class="recent-questions-list">
-                        <li class="empty-recent-item">No recent questions yet.</li>
-                    </ul>
-                </div>
-            </div>
+            <!-- Primary Navigation Menu -->
+            <nav class="sidebar-nav">
+                <div class="nav-section-label">WORKSPACE</div>
+                <ul class="nav-menu">
+                    <li>
+                        <a href="#dashboard" class="nav-item active" data-view="dashboard" id="nav-item-dashboard">
+                            <span class="nav-icon">🏠</span>
+                            <span class="nav-label">Dashboard</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#documents" class="nav-item" data-view="documents" id="nav-item-documents">
+                            <span class="nav-icon">📁</span>
+                            <span class="nav-label">Documents</span>
+                            <span class="nav-badge" id="nav-badge-docs">0</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#search" class="nav-item" data-view="search" id="nav-item-search">
+                            <span class="nav-icon">🔍</span>
+                            <span class="nav-label">Search &amp; Analyze</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#chat" class="nav-item" data-view="chat" id="nav-item-chat">
+                            <span class="nav-icon">💬</span>
+                            <span class="nav-label">Chat</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#sessions" class="nav-item" data-view="sessions" id="nav-item-sessions">
+                            <span class="nav-icon">💬</span>
+                            <span class="nav-label">Sessions</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#history" class="nav-item" data-view="history" id="nav-item-history">
+                            <span class="nav-icon">📜</span>
+                            <span class="nav-label">History</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#analytics" class="nav-item" data-view="analytics" id="nav-item-analytics">
+                            <span class="nav-icon">📊</span>
+                            <span class="nav-label">Analytics</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#rag" class="nav-item" data-view="rag" id="nav-item-rag">
+                            <span class="nav-icon">🧬</span>
+                            <span class="nav-label">How RAG Works</span>
+                        </a>
+                    </li>
+                </ul>
+            </nav>
 
-            <!-- Indexing Actions -->
-            <div class="sidebar-section actions-section">
-                <button id="btn-index" class="btn btn-primary" disabled>
-                    <span class="btn-icon">⚡</span> <span id="btn-index-text">Index Documents</span>
-                </button>
-                <div class="action-btn-row">
-                    <button id="btn-rebuild" class="btn btn-secondary btn-sm" title="Re-extract and rebuild FAISS vector index">
-                        <span>🔄</span> Rebuild Index
-                    </button>
-                    <button id="btn-reset" class="btn btn-danger btn-sm" title="Clear all uploaded documents and reset index">
-                        <span>🧹</span> Clear All
-                    </button>
-                </div>
-            </div>
-
-            <!-- System Status Panel -->
+            <!-- Sidebar Footer: System Status -->
             <div class="sidebar-footer">
-                <div class="status-card">
-                    <div class="status-header-row">
-                        <span class="status-label">System Status</span>
+                <div class="status-card-compact">
+                    <div class="status-indicator-row">
                         <span class="status-badge ready" id="system-status">
                             <span class="status-dot"></span> <span id="status-text">Checking...</span>
                         </span>
+                        <button type="button" id="btn-open-pipeline-modal" class="btn-subtle btn-inspect-pipeline" title="Inspect RAG Subsystems & Pipeline Architecture">
+                            ⚙️ Details
+                        </button>
                     </div>
-                    
-                    <div class="status-grid">
-                        <div class="stat-box">
-                            <span class="stat-val" id="stat-docs">0</span>
-                            <span class="stat-lbl">Documents</span>
-                        </div>
-                        <div class="stat-box">
-                            <span class="stat-val stat-val-indexed" id="stat-indexed">0</span>
-                            <span class="stat-lbl">Indexed</span>
-                        </div>
-                        <div class="stat-box">
-                            <span class="stat-val stat-val-pending" id="stat-pending">0</span>
-                            <span class="stat-lbl">Pending</span>
-                        </div>
-                        <div class="stat-box">
-                            <span class="stat-val" id="stat-pages">0</span>
-                            <span class="stat-lbl">Pages</span>
-                        </div>
-                        <div class="stat-box">
-                            <span class="stat-val" id="stat-chunks">0</span>
-                            <span class="stat-lbl">Chunks</span>
-                        </div>
+                    <div class="sidebar-mini-meta">
+                        <span id="sidebar-meta-docs">0 Docs</span> &bull;
+                        <span id="sidebar-meta-chunks">0 Chunks</span>
                     </div>
-
-                    <div class="status-meta">
-                        <div class="meta-row">
-                            <span class="meta-key">Vector Index:</span>
-                            <span class="meta-val highlight">FAISS ✓</span>
-                        </div>
-                        <div class="meta-row">
-                            <span class="meta-key">AI Model:</span>
-                            <span class="meta-val" id="stat-model">Gemini</span>
-                        </div>
-                        <div class="meta-row">
-                            <span class="meta-key">Active Selection:</span>
-                            <span class="meta-val highlight" id="stat-selected-summary">0 selected</span>
-                        </div>
+                    <div class="hidden-legacy-stats hidden">
+                        <span id="stat-docs">0</span>
+                        <span id="stat-indexed">0</span>
+                        <span id="stat-pending">0</span>
+                        <span id="stat-pages">0</span>
+                        <span id="stat-chunks">0</span>
+                        <span id="stat-model">Gemini</span>
+                        <span id="stat-selected-summary">0 selected</span>
                     </div>
                 </div>
             </div>
         </aside>
+        <div class="sidebar-backdrop hidden" id="sidebar-backdrop"></div>
 
-        <!-- MAIN CONTENT AREA -->
-        <main class="main-content">
-            <!-- Header -->
-            <header class="chat-header">
-                <div class="header-left">
-                    <div class="header-title-row">
-                        <h1 id="main-header-title">RAG Document Assistant</h1>
-                        <span class="memory-badge" id="memory-badge" title="Conversational Memory is Active (Follow-ups enabled)">
-                            <span class="memory-pulse-dot"></span> Conversation Memory: ON
-                        </span>
-                    </div>
-                    <p class="header-subtitle" id="main-header-subtitle">Multi-document search, smart filtering & conversational follow-ups</p>
-                    <div class="pipeline-status-pills" id="pipeline-status-pills">
-                        <span class="status-pill status-pill-hybrid" id="pill-hybrid"><span class="pill-dot">●</span> Hybrid Search</span>
-                        <span class="status-pill status-pill-faiss" id="pill-faiss"><span class="pill-dot">●</span> FAISS Dense</span>
-                        <span class="status-pill status-pill-bm25" id="pill-bm25"><span class="pill-dot">●</span> BM25 Sparse</span>
-                        <span class="status-pill status-pill-reranker" id="pill-reranker"><span class="pill-dot">●</span> Cross-Encoder</span>
-                        <span class="status-pill status-pill-multiquery" id="pill-multiquery"><span class="pill-dot">●</span> Multi-Query</span>
-                        <span class="status-pill status-pill-decomposition" id="pill-decomposition"><span class="pill-dot">●</span> Query Decomposition</span>
-                        <span class="status-pill status-pill-adaptive" id="pill-adaptive"><span class="pill-dot">●</span> Adaptive Retrieval</span>
-                        <span class="status-pill status-pill-compression" id="pill-compression"><span class="pill-dot">●</span> Contextual Compression</span>
-                        <span class="status-pill status-pill-table" id="pill-table"><span class="pill-dot">●</span> Table Extraction</span>
-                        <span class="status-pill status-pill-evaluation" id="pill-evaluation"><span class="pill-dot">●</span> Answer Evaluation</span>
-                        <span class="status-pill status-pill-correction" id="pill-correction"><span class="pill-dot">●</span> Answer Correction</span>
+        <!-- MAIN WORKSPACE CONTENT AREA -->
+        <main class="main-content" id="main-content">
+            <!-- Global Top Header -->
+            <header class="app-topbar">
+                <div class="topbar-left">
+                    <button type="button" id="btn-mobile-sidebar-toggle" class="btn-mobile-menu" title="Toggle Sidebar">
+                        ☰
+                    </button>
+                    <div class="topbar-title-group">
+                        <h1 id="main-header-title">Document Assistant</h1>
+                        <p class="topbar-subtitle" id="main-header-subtitle">Search, explore, and ask questions across your documents</p>
                     </div>
                 </div>
-                <div class="header-right">
-                    <button id="btn-toggle-view" class="btn btn-analytics-trigger btn-sm" title="Toggle between Chat and Analytics Dashboard">
-                        <span id="toggle-view-icon">📊</span> <span id="toggle-view-text">Analytics</span>
+
+                <div class="topbar-right">
+                    <!-- Global Memory Badge -->
+                    <span class="memory-badge" id="memory-badge" title="Conversational Memory is Active">
+                        <span class="memory-pulse-dot"></span> Memory Active
+                    </span>
+
+                    <!-- Polished Theme Toggle Button -->
+                    <button type="button" id="btn-theme-toggle" class="theme-toggle-btn" aria-label="Toggle theme mode" title="Switch Theme (Light / Dark)">
+                        <span class="theme-toggle-icon" id="theme-toggle-icon">🌙</span>
+                        <span class="theme-toggle-label" id="theme-toggle-label">Dark</span>
                     </button>
-                    <button id="btn-new-chat" class="btn btn-secondary btn-sm" title="Start a fresh conversation session">
-                        <span>➕</span> New Chat
-                    </button>
-                    <button id="btn-clear-chat" class="btn btn-ghost btn-sm" title="Clear Chat History">
-                        <span>🧹</span> Clear Chat
-                    </button>
+
+                    <!-- Quick Navigation & View Actions -->
+                    <div class="topbar-actions">
+                        <button id="btn-topbar-docs" class="btn btn-secondary btn-sm" title="Manage and Upload Documents">
+                            <span>📁</span> Documents
+                        </button>
+                        <button id="btn-topbar-chat" class="btn btn-primary btn-sm" title="Ask Questions in Chat Workspace">
+                            <span>💬</span> Assistant
+                        </button>
+                        <button id="btn-toggle-view" class="btn btn-analytics-trigger btn-sm" title="Toggle between Chat and Analytics Dashboard">
+                            <span id="toggle-view-icon">📊</span> <span id="toggle-view-text">Analytics</span>
+                        </button>
+                    </div>
                 </div>
             </header>
 
             <!-- Alerts Banner -->
             <div id="alert-banner" class="alert-banner hidden"></div>
 
-            <!-- CHAT VIEW SECTION -->
-            <div id="chat-view-section" class="chat-view-section">
-                <!-- Chat Messages Container -->
-                <div class="chat-container" id="chat-container">
-                    <div class="chat-messages" id="chat-messages">
-                        <!-- Welcome Placeholder Message -->
-                        <div class="message system-message" id="welcome-message">
-                            <div class="message-avatar">🤖</div>
-                            <div class="message-content">
-                                <h3>Welcome to Multi-Document RAG Assistant</h3>
-                                <p>Ask fast, accurate, and document-grounded questions across your chosen PDFs.</p>
-                                <ol>
-                                    <li><strong>Upload & Index PDFs:</strong> Upload PDFs in the sidebar and click <strong>⚡ Index Documents</strong>.</li>
-                                    <li><strong>Smart Document Filtering:</strong> Check/uncheck documents to restrict search scope to specific files only.</li>
-                                    <li><strong>Ask Questions & Terms:</strong> Ask full questions, comparisons (e.g. <em>"Compare SQL and Python"</em>), or one-word concepts (e.g. <em>"JOIN"</em>, <em>"Primary Key"</em>).</li>
-                                    <li><strong>Analytics & Evaluation:</strong> Click <strong>📊 Analytics</strong> in the header to view performance metrics, grounding telemetry, and history.</li>
-                                </ol>
+            <!-- ==========================================================
+                 VIEW 1: DASHBOARD WORKSPACE (#view-dashboard)
+                 ========================================================== -->
+            <section id="view-dashboard" class="app-view">
+                <div class="view-scroll-container">
+                    <!-- Dashboard Welcome Hero -->
+                    <div class="dashboard-hero">
+                        <div class="hero-text">
+                            <h2>Document Dashboard</h2>
+                            <p>Explore and ask questions across your uploaded documents.</p>
+                        </div>
+                        <div class="hero-status-pill">
+                            <span class="pulse-green">●</span> <strong id="dash-engine-status">System Ready</strong>
+                        </div>
+                    </div>
+
+                    <!-- Top 4 Summary Cards -->
+                    <div class="dashboard-metrics-grid">
+                        <div class="metric-card" onclick="window.location.hash='#documents'">
+                            <div class="metric-icon metric-purple">📁</div>
+                            <div class="metric-data">
+                                <span class="metric-title">Total Documents</span>
+                                <span class="metric-number" id="dash-metric-docs">0</span>
+                                <span class="metric-caption" id="dash-metric-docs-sub">Uploaded files</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card" onclick="window.location.hash='#documents'">
+                            <div class="metric-icon metric-blue">📑</div>
+                            <div class="metric-data">
+                                <span class="metric-title">Indexed Content</span>
+                                <span class="metric-number" id="dash-metric-chunks">0</span>
+                                <span class="metric-caption" id="dash-metric-pages-sub">Across 0 total pages</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card" onclick="window.location.hash='#analytics'">
+                            <div class="metric-icon metric-teal">💬</div>
+                            <div class="metric-data">
+                                <span class="metric-title">Questions Answered</span>
+                                <span class="metric-number" id="dash-metric-questions">0</span>
+                                <span class="metric-caption">Total interactions</span>
+                            </div>
+                        </div>
+
+                        <div class="metric-card" onclick="window.location.hash='#analytics'">
+                            <div class="metric-icon metric-emerald">🛡️</div>
+                            <div class="metric-data">
+                                <span class="metric-title">Avg Accuracy</span>
+                                <span class="metric-number" id="dash-metric-grounded">100%</span>
+                                <span class="metric-caption">Source verified</span>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Searching / Thinking Indicator -->
-                    <div class="thinking-indicator hidden" id="thinking-indicator">
-                        <div class="message-avatar">🤖</div>
-                        <div class="thinking-bubble">
-                            <span class="thinking-text" id="thinking-text">🤖 Searching documents...</span>
-                            <div class="typing-dots">
-                                <span></span>
-                                <span></span>
-                                <span></span>
+                    <!-- Quick Action Cards Grid -->
+                    <div class="dashboard-actions-grid">
+                        <div class="quick-action-card" onclick="window.location.hash='#chat'">
+                            <div class="action-card-header">
+                                <span class="action-card-icon">💬</span>
+                                <h3>Ask Assistant</h3>
+                            </div>
+                            <p>Ask questions about your documents and get answers with clear page citations.</p>
+                            <span class="action-card-link">Open Assistant &rarr;</span>
+                        </div>
+
+                        <div class="quick-action-card" onclick="window.location.hash='#documents'">
+                            <div class="action-card-header">
+                                <span class="action-card-icon">📤</span>
+                                <h3>Manage Documents</h3>
+                            </div>
+                            <p>Upload new PDF files, review page counts, and organize your library.</p>
+                            <span class="action-card-link">Manage Library &rarr;</span>
+                        </div>
+
+                        <div class="quick-action-card" onclick="window.location.hash='#search'">
+                            <div class="action-card-header">
+                                <span class="action-card-icon">🔍</span>
+                                <h3>Search &amp; Explore</h3>
+                            </div>
+                            <p>Instantly search across your documents by keyword or phrase.</p>
+                            <span class="action-card-link">Start Searching &rarr;</span>
+                        </div>
+
+                        <div class="quick-action-card" onclick="window.location.hash='#analytics'">
+                            <div class="action-card-header">
+                                <span class="action-card-icon">📊</span>
+                                <h3>Analytics &amp; Accuracy</h3>
+                            </div>
+                            <p>View response times, accuracy metrics, and document citations.</p>
+                            <span class="action-card-link">View Analytics &rarr;</span>
+                        </div>
+                    </div>
+
+                    <!-- Active Document Library Preview -->
+                    <div class="dashboard-section-card">
+                        <div class="section-card-header">
+                            <div>
+                                <h3>Active Documents</h3>
+                                <p class="section-card-sub">Documents available for search and questions</p>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="window.location.hash='#documents'">
+                                Manage All &rarr;
+                            </button>
+                        </div>
+                        <div class="dash-doc-list-container" id="dash-doc-list-preview">
+                            <div class="empty-list-placeholder">Loading document collection...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==========================================================
+                 VIEW 2: DOCUMENTS WORKSPACE (#view-documents)
+                 ========================================================== -->
+            <section id="view-documents" class="app-view hidden">
+                <div class="view-scroll-container">
+                    <!-- Top Action Bar -->
+                    <div class="workspace-header-bar">
+                        <div class="workspace-title-wrap">
+                            <h2>📁 Document Management</h2>
+                            <span class="file-count" id="file-count-badge">0 documents</span>
+                        </div>
+                        <div class="workspace-action-buttons">
+                            <button id="btn-index" class="btn btn-primary" disabled>
+                                <span class="btn-icon">⚡</span> <span id="btn-index-text">Index Documents</span>
+                            </button>
+                            <button id="btn-rebuild" class="btn btn-secondary btn-sm" title="Re-index all documents">
+                                <span>🔄</span> Re-index
+                            </button>
+                            <button id="btn-reset" class="btn btn-danger btn-sm" title="Clear all uploaded documents and reset index">
+                                <span>🧹</span> Clear All
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Spacious PDF Upload Zone -->
+                    <div class="document-upload-card">
+                        <div class="drop-zone" id="drop-zone">
+                            <input type="file" id="file-input" multiple accept=".pdf" class="file-input">
+                            <div class="drop-zone-content">
+                                <span class="upload-icon">📤</span>
+                                <h3 class="upload-main-text">Drag &amp; drop PDF documents here or <span class="browse-link">browse files</span></h3>
+                                <p class="file-hint">Upload multiple PDFs at once &bull; Up to 50MB per file</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Selection Controls & Document Table -->
+                    <div class="documents-table-card">
+                        <div class="selection-control-bar" id="selection-control-bar">
+                            <div class="selection-toggle-row">
+                                <label class="checkbox-container" id="select-all-label">
+                                    <input type="checkbox" id="select-all-checkbox" checked>
+                                    <span class="custom-checkmark"></span>
+                                    <span class="checkbox-text">Select All Documents</span>
+                                </label>
+                                <span class="selection-count-badge" id="selected-doc-count">0 of 0 selected</span>
+                            </div>
+                            <div class="selection-buttons-row">
+                                <button type="button" id="btn-select-all" class="btn-subtle" title="Select all uploaded documents">
+                                    Select All
+                                </button>
+                                <button type="button" id="btn-clear-selection" class="btn-subtle" title="Clear document selection">
+                                    Clear Selection
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Document List Table Container -->
+                        <div class="file-list-container">
+                            <ul class="file-list" id="file-list">
+                                <li class="empty-list-item">No documents uploaded yet. Upload a PDF above to begin.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==========================================================
+                 VIEW 3: SEARCH & ANALYZE WORKSPACE (#view-search)
+                 ========================================================== -->
+            <section id="view-search" class="app-view hidden">
+                <div class="view-scroll-container">
+                    <div class="search-workspace-header">
+                        <h2>🔍 Search &amp; Explore</h2>
+                        <p class="search-workspace-subtitle">Find passages and keywords across your documents instantly.</p>
+                    </div>
+
+                    <!-- Search Input Box Card -->
+                    <div class="search-box-card">
+                        <div class="search-input-group">
+                            <span class="search-input-icon">🔍</span>
+                            <input
+                                type="text"
+                                id="doc-search-input"
+                                class="doc-search-input"
+                                placeholder="Search across your documents... (e.g. normalization, primary key, decorators)"
+                                autocomplete="off"
+                            />
+                            <button type="button" id="btn-clear-doc-search" class="btn-clear-search hidden" title="Clear search text">&times;</button>
+                        </div>
+
+                        <!-- Quick Keyword Chips -->
+                        <div class="search-quick-chips">
+                            <span class="chips-label">Quick topics:</span>
+                            <button type="button" class="search-chip" data-term="normalization">normalization</button>
+                            <button type="button" class="search-chip" data-term="Primary Key">Primary Key</button>
+                            <button type="button" class="search-chip" data-term="ACID">ACID</button>
+                            <button type="button" class="search-chip" data-term="JOIN">JOIN</button>
+                            <button type="button" class="search-chip" data-term="DML">DML</button>
+                            <button type="button" class="search-chip" data-term="Decorators">Decorators</button>
+                            <button type="button" class="search-chip" data-term="threshold cryptography">threshold cryptography</button>
+                        </div>
+
+                        <div class="search-results-meta" id="search-results-meta">
+                            <span class="search-scope-badge" id="search-scope-badge">Searching in 0 selected documents</span>
+                            <span id="search-status-text">Type a query to search across documents.</span>
+                        </div>
+                    </div>
+
+                    <!-- Search Results Stream -->
+                    <div class="search-results-card">
+                        <div class="search-results-container" id="search-results-container">
+                            <div class="search-empty-state" id="search-empty-state">
+                                <span class="empty-icon">💡</span>
+                                <h3>Instant Document Search</h3>
+                                <p>Find relevant passages and answers directly from your uploaded files.</p>
                             </div>
                         </div>
                     </div>
                 </div>
+            </section>
 
-                <!-- Chat Input Area -->
-                <div class="chat-input-wrapper">
-                    <form id="chat-form" class="chat-form">
-                        <div class="input-container">
-                            <textarea 
-                                id="user-input" 
-                                rows="1" 
-                                placeholder="Ask a question about your selected documents..." 
-                                required
-                            ></textarea>
-                            <button type="submit" id="btn-send" class="btn-send" title="Send Question">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                                </svg>
-                            </button>
+            <!-- ==========================================================
+                 VIEW 4: CHAT / SESSIONS WORKSPACE (#view-chat)
+                 ========================================================== -->
+            <section id="view-chat" class="app-view hidden">
+                <div class="chat-workspace-container" id="chat-view-section">
+                    <!-- Chat Workspace Sub-Header: Scope & Sessions -->
+                    <div class="chat-scope-bar">
+                        <div class="chat-scope-left">
+                            <div class="active-doc-pill" id="chat-active-doc-pill">
+                                <span>📚</span>
+                                <span id="chat-scope-doc-text">Selected Documents: Loading...</span>
+                                <button type="button" class="btn-pill-manage" onclick="window.location.hash='#documents'" title="Change selected documents">
+                                    Manage &rarr;
+                                </button>
+                            </div>
                         </div>
-                    </form>
-                    <div class="input-footer">
-                        <span>Press <strong>Enter</strong> to send &bull; <strong>Shift + Enter</strong> for a new line &bull; Strict document grounding enabled</span>
-                    </div>
-                </div>
-            </div>
 
-            <!-- ANALYTICS & EVALUATION DASHBOARD VIEW SECTION -->
-            <div id="analytics-view-section" class="analytics-view-section hidden">
-                <div class="analytics-container">
-                    <!-- Dashboard Actions Bar -->
-                    <div class="analytics-actions-bar">
-                        <div class="analytics-title-group">
-                            <h2>📊 Performance & Evaluation Overview</h2>
-                            <span class="analytics-sync-badge" id="analytics-last-synced">Updated: Live</span>
-                        </div>
-                        <div class="analytics-controls">
-                            <button type="button" id="btn-export-analytics" class="btn btn-primary btn-sm" title="Download analytics data as CSV">
-                                <span>📥</span> Export CSV
+                        <div class="chat-scope-right">
+                            <!-- Sessions Switcher -->
+                            <div class="session-selector-group">
+                                <span class="session-label">Session:</span>
+                                <select id="chat-session-select" class="session-dropdown" title="Select conversation session">
+                                    <option value="default">Default Session</option>
+                                    <option value="dbms_prep">DBMS Preparation</option>
+                                    <option value="sgcube_research">SG CUBE Research</option>
+                                    <option value="sql_revision">SQL Revision</option>
+                                </select>
+                            </div>
+
+                            <button id="btn-new-chat" class="btn btn-secondary btn-sm" title="Start a fresh conversation session">
+                                <span>➕</span> New Chat
                             </button>
-                            <button type="button" id="btn-refresh-analytics" class="btn btn-secondary btn-sm" title="Refresh metrics and charts">
-                                <span>🔄</span> Refresh
-                            </button>
-                            <button type="button" id="btn-clear-analytics-data" class="btn btn-danger btn-sm" title="Reset analytics database">
-                                <span>🧹</span> Clear Data
-                            </button>
-                            <button type="button" id="btn-switch-to-chat" class="btn btn-ghost btn-sm" title="Return to Chat Interface">
-                                <span>💬</span> Back to Chat
+                            <button id="btn-clear-chat" class="btn btn-ghost btn-sm" title="Clear Chat History">
+                                <span>🧹</span> Clear
                             </button>
                         </div>
                     </div>
 
-                    <!-- Document & Index Statistics Strip -->
-                    <div class="analytics-doc-stats-strip">
-                        <div class="doc-stat-pill">
-                            <span class="doc-stat-icon">📚</span>
-                            <span class="doc-stat-title">Documents:</span>
-                            <strong id="stat-dash-docs">0</strong>
-                        </div>
-                        <div class="doc-stat-pill">
-                            <span class="doc-stat-icon">📄</span>
-                            <span class="doc-stat-title">Total Pages:</span>
-                            <strong id="stat-dash-pages">0</strong>
-                        </div>
-                        <div class="doc-stat-pill">
-                            <span class="doc-stat-icon">🧩</span>
-                            <span class="doc-stat-title">Indexed Chunks:</span>
-                            <strong id="stat-dash-chunks">0</strong>
-                        </div>
-                        <div class="doc-stat-pill">
-                            <span class="doc-stat-icon">⚡</span>
-                            <span class="doc-stat-title">Vectorstore:</span>
-                            <strong id="stat-dash-vs-status" class="text-success">Active</strong>
-                        </div>
-                        <div class="doc-stat-pill doc-stat-pill-action">
-                            <button type="button" id="btn-run-evaluation" class="btn btn-primary btn-sm" style="padding: 4px 12px; font-size: 11px;">
-                                <span>▶</span> Run Evaluation Benchmark
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Benchmark Evaluation Panel (Collapsible / Dynamic) -->
-                    <div class="analytics-evaluation-panel" id="analytics-evaluation-panel">
-                        <div class="eval-panel-header">
-                            <div class="eval-header-title">
-                                <span>🧪</span> <strong>RAG Evaluation Benchmark (20 Test Queries)</strong>
-                                <span class="eval-badge" id="eval-status-badge">Ready</span>
-                            </div>
-                            <span class="eval-timestamp" id="eval-timestamp">Last Run: Not executed yet</span>
-                        </div>
-                        <div class="eval-metrics-row">
-                            <div class="eval-metric-box">
-                                <span class="eval-m-label">Hit@1 Precision</span>
-                                <span class="eval-m-val" id="eval-hit1">--</span>
-                            </div>
-                            <div class="eval-metric-box">
-                                <span class="eval-m-label">Hit@3 Recall</span>
-                                <span class="eval-m-val" id="eval-hit3">--</span>
-                            </div>
-                            <div class="eval-metric-box">
-                                <span class="eval-m-label">Retrieval Precision</span>
-                                <span class="eval-m-val" id="eval-precision">--</span>
-                            </div>
-                            <div class="eval-metric-box">
-                                <span class="eval-m-label">Retrieval Recall</span>
-                                <span class="eval-m-val" id="eval-recall">--</span>
-                            </div>
-                            <div class="eval-metric-box">
-                                <span class="eval-m-label">Source Accuracy</span>
-                                <span class="eval-m-val" id="eval-source-acc">--</span>
-                            </div>
-                            <div class="eval-metric-box">
-                                <span class="eval-m-label">Page Accuracy</span>
-                                <span class="eval-m-val" id="eval-page-acc">--</span>
-                            </div>
-                            <div class="eval-metric-box">
-                                <span class="eval-m-label">OOD Refusal Rate</span>
-                                <span class="eval-m-val" id="eval-ood-refusal">--</span>
-                            </div>
-                            <div class="eval-metric-box">
-                                <span class="eval-m-label">Avg Groundedness</span>
-                                <span class="eval-m-val" id="eval-groundedness">--</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 12 SUMMARY & MONITORING CARDS -->
-                    <div class="analytics-summary-grid">
-                        <div class="analytics-card stat-card-purple">
-                            <div class="card-icon">🔢</div>
-                            <div class="card-content">
-                                <span class="card-label">Total Questions</span>
-                                <span class="card-value" id="stat-total-questions">0</span>
-                                <span class="card-subtext" id="stat-cache-rate">0% Cache Hit Rate</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-blue">
-                            <div class="card-icon">⚡</div>
-                            <div class="card-content">
-                                <span class="card-label">Avg Response Time</span>
-                                <span class="card-value" id="stat-avg-resp-time">0.00s</span>
-                                <span class="card-subtext" id="stat-retrieval-split">Ret: 0.0s | Gen: 0.0s</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-teal">
-                            <div class="card-icon">🎯</div>
-                            <div class="card-content">
-                                <span class="card-label">Avg Retrieval Relevance</span>
-                                <span class="card-value" id="stat-avg-relevance">0.0%</span>
-                                <span class="card-subtext">Cross-Encoder precision</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-emerald">
-                            <div class="card-icon">🛡️</div>
-                            <div class="card-content">
-                                <span class="card-label">Avg Groundedness</span>
-                                <span class="card-value" id="stat-avg-groundedness">0.0%</span>
-                                <span class="card-subtext">Chunk source alignment</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-cyan">
-                            <div class="card-icon">🧠</div>
-                            <div class="card-content">
-                                <span class="card-label">Avg Faithfulness</span>
-                                <span class="card-value" id="stat-avg-faithfulness">0.0%</span>
-                                <span class="card-subtext">Factual consistency</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-indigo">
-                            <div class="card-icon">📑</div>
-                            <div class="card-content">
-                                <span class="card-label">Avg Source Coverage</span>
-                                <span class="card-value" id="stat-avg-coverage">0.0%</span>
-                                <span class="card-subtext">Extracted citation density</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-green">
-                            <div class="card-icon">✅</div>
-                            <div class="card-content">
-                                <span class="card-label">Verified Answers</span>
-                                <span class="card-value" id="stat-verified-count">0</span>
-                                <span class="card-subtext">100% supported claims</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-amber">
-                            <div class="card-icon">⚠️</div>
-                            <div class="card-content">
-                                <span class="card-label">Unsupported Answers</span>
-                                <span class="card-value" id="stat-unsupported-count">0</span>
-                                <span class="card-subtext">Strict fallback triggered</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-pink">
-                            <div class="card-icon">🔁</div>
-                            <div class="card-content">
-                                <span class="card-label">Avg Retry Count</span>
-                                <span class="card-value" id="stat-avg-retries">0.00</span>
-                                <span class="card-subtext">Adaptive query reformulations</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-emerald">
-                            <div class="card-icon">👍</div>
-                            <div class="card-content">
-                                <span class="card-label">User Satisfaction</span>
-                                <span class="card-value" id="stat-user-satisfaction">100.0%</span>
-                                <span class="card-subtext" id="stat-feedback-detail">👍 0 Helpful &bull; 👎 0 Unhelpful</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-blue">
-                            <div class="card-icon">⏱️</div>
-                            <div class="card-content">
-                                <span class="card-label">Latency Range (Min / Max)</span>
-                                <span class="card-value" id="stat-latency-range">0.0s - 0.0s</span>
-                                <span class="card-subtext" id="stat-latency-stages">Ret: 0ms | Rerank: 0ms | Gen: 0s</span>
-                            </div>
-                        </div>
-
-                        <div class="analytics-card stat-card-purple">
-                            <div class="card-icon">📊</div>
-                            <div class="card-content">
-                                <span class="card-label">Confidence Profile</span>
-                                <span class="card-value" id="stat-conf-profile">0 High</span>
-                                <span class="card-subtext" id="stat-conf-detail">High: 0 | Med: 0 | Low: 0</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 5 INTERACTIVE CHARTS SECTION -->
-                    <div class="analytics-charts-grid">
-                        <!-- Chart A: Response Time -->
-                        <div class="chart-card">
-                            <div class="chart-header">
-                                <h3>⚡ Response Time per Question</h3>
-                                <span class="chart-badge">Latency (seconds)</span>
-                            </div>
-                            <div class="chart-wrapper">
-                                <canvas id="chart-response-time"></canvas>
-                            </div>
-                        </div>
-
-                        <!-- Chart B: Retrieval Relevance -->
-                        <div class="chart-card">
-                            <div class="chart-header">
-                                <h3>🎯 Retrieval Relevance Score</h3>
-                                <span class="chart-badge">Score (0-100%)</span>
-                            </div>
-                            <div class="chart-wrapper">
-                                <canvas id="chart-retrieval-relevance"></canvas>
-                            </div>
-                        </div>
-
-                        <!-- Chart C: Groundedness & Faithfulness -->
-                        <div class="chart-card">
-                            <div class="chart-header">
-                                <h3>🛡️ Groundedness vs Faithfulness</h3>
-                                <span class="chart-badge">Comparison (%)</span>
-                            </div>
-                            <div class="chart-wrapper">
-                                <canvas id="chart-grounding-faithfulness"></canvas>
-                            </div>
-                        </div>
-
-                        <!-- Chart D: Verified vs Unsupported Status -->
-                        <div class="chart-card">
-                            <div class="chart-header">
-                                <h3>⚖️ Answer Verification Distribution</h3>
-                                <span class="chart-badge">Distribution</span>
-                            </div>
-                            <div class="chart-wrapper">
-                                <canvas id="chart-status-distribution"></canvas>
-                            </div>
-                        </div>
-
-                        <!-- Chart E: Document Usage Frequency -->
-                        <div class="chart-card chart-card-full-width">
-                            <div class="chart-header">
-                                <h3>📚 Top Referenced Documents</h3>
-                                <span class="chart-badge">Frequency of source citations</span>
-                            </div>
-                            <div class="chart-wrapper">
-                                <canvas id="chart-document-usage"></canvas>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- QUESTION HISTORY AUDIT TABLE SECTION -->
-                    <div class="analytics-table-section">
-                        <div class="table-section-header">
-                            <div class="table-title-wrap">
-                                <h3>📜 Question Evaluation History</h3>
-                                <span class="table-count-badge" id="table-row-count">0 questions recorded</span>
-                            </div>
-                            <div class="table-actions">
-                                <div class="table-search-box">
-                                    <span class="search-icon">🔍</span>
-                                    <input type="text" id="analytics-table-filter" placeholder="Search questions, status, sources..." />
+                    <!-- Chat Messages Stream -->
+                    <div class="chat-container" id="chat-container">
+                        <div class="chat-messages" id="chat-messages">
+                            <!-- Welcome Placeholder Message -->
+                            <div class="message system-message" id="welcome-message">
+                                <div class="message-avatar">💬</div>
+                                <div class="message-content">
+                                    <h3>Welcome to Document Assistant</h3>
+                                    <p>Ask questions about your documents and get direct answers with page citations.</p>
+                                    <ol>
+                                        <li><strong>Upload Documents:</strong> Go to <strong>Documents</strong> to add PDFs and click <strong>Index Documents</strong>.</li>
+                                        <li><strong>Choose Scope:</strong> Select all documents or choose specific files to focus your question.</li>
+                                        <li><strong>Ask Anything:</strong> Ask direct questions or compare documents with natural phrasing.</li>
+                                        <li><strong>Source Citations:</strong> Every answer links to the exact document and page reference.</li>
+                                    </ol>
                                 </div>
                             </div>
                         </div>
 
-                        <div class="table-container">
-                            <table class="analytics-table" id="analytics-data-table">
-                                <thead>
-                                    <tr>
-                                        <th data-sort="id" class="sortable">ID <span>↕</span></th>
-                                        <th data-sort="question" class="sortable">Question <span>↕</span></th>
-                                        <th data-sort="response_time" class="sortable">Time <span>↕</span></th>
-                                        <th data-sort="relevance" class="sortable">Relevance <span>↕</span></th>
-                                        <th data-sort="groundedness" class="sortable">Groundedness <span>↕</span></th>
-                                        <th data-sort="faithfulness" class="sortable">Faithfulness <span>↕</span></th>
-                                        <th data-sort="source_coverage" class="sortable">Coverage <span>↕</span></th>
-                                        <th data-sort="status" class="sortable">Status <span>↕</span></th>
-                                        <th>Details</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="analytics-table-body">
-                                    <tr>
-                                        <td colspan="9" class="table-empty-cell">No analytics data recorded yet. Ask a question in chat to view real-time metrics!</td>
-                                    </tr>
-                                </tbody>
-                            </table>
+                        <!-- Searching / Thinking Indicator -->
+                        <div class="thinking-indicator hidden" id="thinking-indicator">
+                            <div class="message-avatar">🤖</div>
+                            <div class="thinking-bubble">
+                                <span class="thinking-text" id="thinking-text">Searching documents...</span>
+                                <div class="typing-dots">
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Chat Input Area -->
+                    <div class="chat-input-wrapper">
+                        <form id="chat-form" class="chat-form">
+                            <div class="input-container">
+                                <textarea
+                                    id="user-input"
+                                    rows="1"
+                                    placeholder="Ask a question about your selected documents..."
+                                    required
+                                ></textarea>
+                                <button type="submit" id="btn-send" class="btn-send" title="Send Question">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                    </svg>
+                                </button>
+                            </div>
+                        </form>
+                        <div class="input-footer">
+                            <span>Press <strong>Enter</strong> to send &bull; <strong>Shift + Enter</strong> for a new line</span>
                         </div>
                     </div>
                 </div>
-            </div>
+            </section>
+
+
+            <!-- ==========================================================
+                 VIEW: SESSIONS WORKSPACE (#view-sessions)
+                 ========================================================== -->
+            <section id="view-sessions" class="app-view hidden">
+                <div class="view-scroll-container">
+                    <!-- Top Action Bar -->
+                    <div class="workspace-header-bar">
+                        <div class="workspace-title-wrap">
+                            <h2>💬 Sessions</h2>
+                            <p class="sessions-header-sub">Continue your conversations where you left off.</p>
+                        </div>
+                        <div class="workspace-action-buttons">
+                            <button type="button" id="btn-create-session-main" class="btn btn-primary" title="Start a fresh conversation session">
+                                <span class="btn-icon">➕</span> <span>New Session</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Search & Filter Card -->
+                    <div class="sessions-filter-card">
+                        <div class="sessions-search-wrap">
+                            <span class="search-input-icon">🔍</span>
+                            <input
+                                type="text"
+                                id="sessions-search-input"
+                                class="sessions-search-input"
+                                placeholder="Search sessions..."
+                                autocomplete="off"
+                            />
+                            <button type="button" id="btn-clear-sessions-search" class="btn-clear-search hidden" title="Clear search">&times;</button>
+                        </div>
+                        <div class="sessions-filter-meta">
+                            <span class="sessions-count-pill" id="sessions-count-pill">0 sessions</span>
+                            <span class="sessions-storage-tag">Browser-saved session storage</span>
+                        </div>
+                    </div>
+
+                    <!-- Sessions Grid Container -->
+                    <div class="sessions-grid-container" id="sessions-grid-container">
+                        <!-- Populated by JavaScript -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==========================================================
+                 VIEW 5: HISTORY WORKSPACE (#view-history)
+                 ========================================================== -->
+            <section id="view-history" class="app-view hidden">
+                <div class="view-scroll-container">
+                    <div class="history-workspace-header">
+                        <div class="history-title-wrap">
+                            <h2>📜 Question History</h2>
+                            <span class="history-count-badge" id="history-count-badge">0 queries recorded</span>
+                        </div>
+                        <div class="history-actions-bar">
+                            <input type="text" id="history-filter-input" class="history-filter-input" placeholder="Search history..." />
+                            <button type="button" id="btn-clear-recent" class="btn btn-secondary btn-sm" title="Clear query history">
+                                <span>🧹</span> Clear History
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- History Timeline Container -->
+                    <div class="history-timeline-card">
+                        <div class="recent-questions-section" id="recent-questions-section">
+                            <ul id="recent-questions-list" class="recent-questions-list">
+                                <li class="empty-recent-item">No recent questions recorded yet. Questions you ask in Chat will appear here.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==========================================================
+                 VIEW 6: ANALYTICS & EVALUATION WORKSPACE (#view-analytics)
+                 ========================================================== -->
+            <section id="view-analytics" class="app-view hidden">
+                <div class="view-scroll-container" id="analytics-view-section">
+                    <div class="analytics-container">
+                        <!-- Dashboard Actions Bar -->
+                        <div class="analytics-actions-bar">
+                            <div class="analytics-title-group">
+                                <h2>📊 Performance &amp; Accuracy</h2>
+                                <span class="analytics-sync-badge" id="analytics-last-synced">Updated: Live</span>
+                            </div>
+                            <div class="analytics-controls">
+                                <button type="button" id="btn-export-analytics" class="btn btn-primary btn-sm" title="Download analytics data as CSV">
+                                    <span>📥</span> Export CSV
+                                </button>
+                                <button type="button" id="btn-refresh-analytics" class="btn btn-secondary btn-sm" title="Refresh metrics and charts">
+                                    <span>🔄</span> Refresh
+                                </button>
+                                <button type="button" id="btn-clear-analytics-data" class="btn btn-danger btn-sm" title="Reset analytics database">
+                                    <span>🧹</span> Clear Data
+                                </button>
+                                <button type="button" id="btn-switch-to-chat" class="btn btn-ghost btn-sm" title="Return to Chat Interface">
+                                    <span>💬</span> Back to Chat
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Document & Index Statistics Strip -->
+                        <div class="analytics-doc-stats-strip">
+                            <div class="doc-stat-pill">
+                                <span class="doc-stat-icon">📚</span>
+                                <span class="doc-stat-title">Documents:</span>
+                                <strong id="stat-dash-docs">0</strong>
+                            </div>
+                            <div class="doc-stat-pill">
+                                <span class="doc-stat-icon">📄</span>
+                                <span class="doc-stat-title">Total Pages:</span>
+                                <strong id="stat-dash-pages">0</strong>
+                            </div>
+                            <div class="doc-stat-pill">
+                                <span class="doc-stat-icon">🧩</span>
+                                <span class="doc-stat-title">Sections:</span>
+                                <strong id="stat-dash-chunks">0</strong>
+                            </div>
+                            <div class="doc-stat-pill">
+                                <span class="doc-stat-icon">⚡</span>
+                                <span class="doc-stat-title">Status:</span>
+                                <strong id="stat-dash-vs-status" class="text-success">Active</strong>
+                            </div>
+                            <div class="doc-stat-pill doc-stat-pill-action">
+                                <button type="button" id="btn-run-evaluation" class="btn btn-primary btn-sm" style="padding: 4px 12px; font-size: 11px;">
+                                    <span>▶</span> Run Evaluation Benchmark
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Benchmark Evaluation Panel -->
+                        <div class="analytics-evaluation-panel" id="analytics-evaluation-panel">
+                            <div class="eval-panel-header">
+                                <div class="eval-header-title">
+                                    <span>🧪</span> <strong>RAG Evaluation Benchmark (20 Test Queries)</strong>
+                                    <span class="eval-badge" id="eval-status-badge">Ready</span>
+                                </div>
+                                <span class="eval-timestamp" id="eval-timestamp">Last Run: Not executed yet</span>
+                            </div>
+                            <div class="eval-metrics-row">
+                                <div class="eval-metric-box">
+                                    <span class="eval-m-label">Hit@1 Precision</span>
+                                    <span class="eval-m-val" id="eval-hit1">--</span>
+                                </div>
+                                <div class="eval-metric-box">
+                                    <span class="eval-m-label">Hit@3 Recall</span>
+                                    <span class="eval-m-val" id="eval-hit3">--</span>
+                                </div>
+                                <div class="eval-metric-box">
+                                    <span class="eval-m-label">Retrieval Precision</span>
+                                    <span class="eval-m-val" id="eval-precision">--</span>
+                                </div>
+                                <div class="eval-metric-box">
+                                    <span class="eval-m-label">Retrieval Recall</span>
+                                    <span class="eval-m-val" id="eval-recall">--</span>
+                                </div>
+                                <div class="eval-metric-box">
+                                    <span class="eval-m-label">Source Accuracy</span>
+                                    <span class="eval-m-val" id="eval-source-acc">--</span>
+                                </div>
+                                <div class="eval-metric-box">
+                                    <span class="eval-m-label">Page Accuracy</span>
+                                    <span class="eval-m-val" id="eval-page-acc">--</span>
+                                </div>
+                                <div class="eval-metric-box">
+                                    <span class="eval-m-label">OOD Refusal Rate</span>
+                                    <span class="eval-m-val" id="eval-ood-refusal">--</span>
+                                </div>
+                                <div class="eval-metric-box">
+                                    <span class="eval-m-label">Avg Groundedness</span>
+                                    <span class="eval-m-val" id="eval-groundedness">--</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 12 SUMMARY CARDS -->
+                        <div class="analytics-summary-grid">
+                            <div class="analytics-card stat-card-purple">
+                                <div class="card-icon">🔢</div>
+                                <div class="card-content">
+                                    <span class="card-label">Total Questions</span>
+                                    <span class="card-value" id="stat-total-questions">0</span>
+                                    <span class="card-subtext" id="stat-cache-rate">Instant response rate</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-blue">
+                                <div class="card-icon">⚡</div>
+                                <div class="card-content">
+                                    <span class="card-label">Avg Response Time</span>
+                                    <span class="card-value" id="stat-avg-resp-time">0.00s</span>
+                                    <span class="card-subtext" id="stat-retrieval-split">Ret: 0.0s | Gen: 0.0s</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-teal">
+                                <div class="card-icon">🎯</div>
+                                <div class="card-content">
+                                    <span class="card-label">Search Relevance</span>
+                                    <span class="card-value" id="stat-avg-relevance">0.0%</span>
+                                    <span class="card-subtext">Content match score</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-emerald">
+                                <div class="card-icon">🛡️</div>
+                                <div class="card-content">
+                                    <span class="card-label">Avg Accuracy</span>
+                                    <span class="card-value" id="stat-avg-groundedness">0.0%</span>
+                                    <span class="card-subtext">Verified from sources</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-cyan">
+                                <div class="card-icon">🧠</div>
+                                <div class="card-content">
+                                    <span class="card-label">Consistency</span>
+                                    <span class="card-value" id="stat-avg-faithfulness">0.0%</span>
+                                    <span class="card-subtext">Factual consistency</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-indigo">
+                                <div class="card-icon">📑</div>
+                                <div class="card-content">
+                                    <span class="card-label">Source Coverage</span>
+                                    <span class="card-value" id="stat-avg-coverage">0.0%</span>
+                                    <span class="card-subtext">Citations per answer</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-green">
+                                <div class="card-icon">✅</div>
+                                <div class="card-content">
+                                    <span class="card-label">Verified Answers</span>
+                                    <span class="card-value" id="stat-verified-count">0</span>
+                                    <span class="card-subtext">Answers with verified sources</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-amber">
+                                <div class="card-icon">⚠️</div>
+                                <div class="card-content">
+                                    <span class="card-label">Unsupported Answers</span>
+                                    <span class="card-value" id="stat-unsupported-count">0</span>
+                                    <span class="card-subtext">Outside document scope</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-pink">
+                                <div class="card-icon">🔁</div>
+                                <div class="card-content">
+                                    <span class="card-label">Adjustments</span>
+                                    <span class="card-value" id="stat-avg-retries">0.00</span>
+                                    <span class="card-subtext">Query adjustments</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-emerald">
+                                <div class="card-icon">👍</div>
+                                <div class="card-content">
+                                    <span class="card-label">User Satisfaction</span>
+                                    <span class="card-value" id="stat-user-satisfaction">100.0%</span>
+                                    <span class="card-subtext" id="stat-feedback-detail">👍 0 Helpful &bull; 👎 0 Unhelpful</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-blue">
+                                <div class="card-icon">⏱️</div>
+                                <div class="card-content">
+                                    <span class="card-label">Response Time Range</span>
+                                    <span class="card-value" id="stat-latency-range">0.0s - 0.0s</span>
+                                    <span class="card-subtext" id="stat-latency-stages">Search &amp; generation time</span>
+                                </div>
+                            </div>
+
+                            <div class="analytics-card stat-card-purple">
+                                <div class="card-icon">📊</div>
+                                <div class="card-content">
+                                    <span class="card-label">Confidence Profile</span>
+                                    <span class="card-value" id="stat-conf-profile">0 High</span>
+                                    <span class="card-subtext" id="stat-conf-detail">High: 0 | Med: 0 | Low: 0</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- QUESTION HISTORY AUDIT TABLE SECTION -->
+                        <div class="analytics-table-section">
+                            <div class="table-section-header">
+                                <div class="table-title-wrap">
+                                    <h3>📜 Question Evaluation History</h3>
+                                    <span class="table-count-badge" id="table-row-count">0 questions recorded</span>
+                                </div>
+                                <div class="table-actions">
+                                    <div class="table-search-box">
+                                        <span class="search-icon">🔍</span>
+                                        <input type="text" id="analytics-table-filter" placeholder="Search questions, status, sources..." />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="table-container">
+                                <table class="analytics-table" id="analytics-data-table">
+                                    <thead>
+                                        <tr>
+                                            <th data-sort="id" class="sortable">ID <span>↕</span></th>
+                                            <th data-sort="question" class="sortable">Question <span>↕</span></th>
+                                            <th data-sort="response_time" class="sortable">Time <span>↕</span></th>
+                                            <th data-sort="relevance" class="sortable">Relevance <span>↕</span></th>
+                                            <th data-sort="groundedness" class="sortable">Groundedness <span>↕</span></th>
+                                            <th data-sort="faithfulness" class="sortable">Faithfulness <span>↕</span></th>
+                                            <th data-sort="source_coverage" class="sortable">Coverage <span>↕</span></th>
+                                            <th data-sort="status" class="sortable">Status <span>↕</span></th>
+                                            <th>Details</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="analytics-table-body">
+                                        <tr>
+                                            <td colspan="9" class="table-empty-cell">No analytics data recorded yet. Ask a question in chat to view real-time metrics!</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==========================================================
+                 VIEW: HOW RAG WORKS WORKSPACE (#view-rag)
+                 ========================================================== -->
+            <section id="view-rag" class="app-view hidden">
+                <div class="view-scroll-container">
+                    <!-- Hero Section -->
+                    <div class="rag-hero-card">
+                        <div class="rag-hero-header">
+                            <div class="rag-hero-tag">🧬 ARCHITECTURE &amp; PIPELINE</div>
+                            <h2>How RAG Works</h2>
+                            <p class="rag-hero-subtitle">Your documents are retrieved first, then used to build a grounded answer.</p>
+                        </div>
+
+                        <!-- Animated Document-to-Answer Flow Bar -->
+                        <div class="rag-flow-track" id="rag-hero-flow-track">
+                            <div class="flow-track-step">
+                                <span class="flow-icon">📄</span>
+                                <span class="flow-label">Documents</span>
+                            </div>
+                            <span class="flow-arrow">&rarr;</span>
+                            <div class="flow-track-step">
+                                <span class="flow-icon">✂️</span>
+                                <span class="flow-label">Chunks</span>
+                            </div>
+                            <span class="flow-arrow">&rarr;</span>
+                            <div class="flow-track-step">
+                                <span class="flow-icon">✦</span>
+                                <span class="flow-label">Embeddings</span>
+                            </div>
+                            <span class="flow-arrow">&rarr;</span>
+                            <div class="flow-track-step">
+                                <span class="flow-icon">🔎</span>
+                                <span class="flow-label">Retrieval</span>
+                            </div>
+                            <span class="flow-arrow">&rarr;</span>
+                            <div class="flow-track-step">
+                                <span class="flow-icon">🎯</span>
+                                <span class="flow-label">Reranking</span>
+                            </div>
+                            <span class="flow-arrow">&rarr;</span>
+                            <div class="flow-track-step">
+                                <span class="flow-icon">🧹</span>
+                                <span class="flow-label">Compression</span>
+                            </div>
+                            <span class="flow-arrow">&rarr;</span>
+                            <div class="flow-track-step">
+                                <span class="flow-icon">✨</span>
+                                <span class="flow-label">Answer</span>
+                            </div>
+                            <span class="flow-arrow">&rarr;</span>
+                            <div class="flow-track-step">
+                                <span class="flow-icon">✓</span>
+                                <span class="flow-label">Verification</span>
+                            </div>
+                            <span class="flow-arrow">&rarr;</span>
+                            <div class="flow-track-step">
+                                <span class="flow-icon">📚</span>
+                                <span class="flow-label">Citation</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3 Why RAG Value Cards -->
+                    <div class="why-rag-grid">
+                        <div class="why-rag-card">
+                            <div class="why-card-icon">🛡️</div>
+                            <h3>GROUNDING</h3>
+                            <p>Answers are based on retrieved document content, not hallucinated model assumptions.</p>
+                        </div>
+                        <div class="why-rag-card">
+                            <div class="why-card-icon">📌</div>
+                            <h3>TRACEABILITY</h3>
+                            <p>Responses can be connected back to document pages with exact clickable citations.</p>
+                        </div>
+                        <div class="why-rag-card">
+                            <div class="why-card-icon">⚡</div>
+                            <h3>RELEVANCE</h3>
+                            <p>Semantic and keyword retrieval work together via Reciprocal Rank Fusion.</p>
+                        </div>
+                    </div>
+
+                    <!-- Interactive Pipeline Stages Timeline -->
+                    <div class="rag-pipeline-timeline-container">
+                        <div class="pipeline-section-title">
+                            <h3>Project RAG Pipeline Walkthrough</h3>
+                            <p>Accurate, step-by-step breakdown of how this application processes queries into verified answers.</p>
+                        </div>
+
+                        <div class="pipeline-stages-list" id="pipeline-stages-list">
+                            <!-- STAGE 1: DOCUMENTS -->
+                            <div class="pipeline-stage-card" data-stage="1">
+                                <div class="stage-num-badge">STAGE 1</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>📄 Documents</h4>
+                                        <span class="stage-tech-tag">PyPDF Document Loader</span>
+                                    </div>
+                                    <p class="stage-desc">Upload your PDFs and keep the source material in one place. Each uploaded document is validated, parsed, and registered for retrieval.</p>
+                                    <div class="stage-visual-box doc-stack-visual">
+                                        <div class="doc-card-mini doc-1"><span>📄</span> DBMS_Notes.pdf (14 pages)</div>
+                                        <div class="doc-card-mini doc-2"><span>📄</span> SQL_CheatSheet.pdf (8 pages)</div>
+                                        <div class="doc-card-mini doc-3"><span>📄</span> SGCUBE.pdf (6 pages)</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- STAGE 2: EXTRACTION & CHUNKING -->
+                            <div class="pipeline-stage-card" data-stage="2">
+                                <div class="stage-num-badge">STAGE 2</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>✂️ Extraction &amp; Chunking</h4>
+                                        <span class="stage-tech-tag">Recursive Text Splitter</span>
+                                    </div>
+                                    <p class="stage-desc">Text is extracted from each page and divided into useful pieces with controlled token overlap to preserve sentence context across boundaries.</p>
+                                    <div class="stage-visual-box chunking-visual">
+                                        <div class="chunk-card-mini"><strong>Chunk 1:</strong> "Relational Databases store tables..." <span class="page-tag">Page 1</span></div>
+                                        <div class="chunk-card-mini"><strong>Chunk 2:</strong> "Primary keys uniquely identify records..." <span class="page-tag">Page 2</span></div>
+                                        <div class="chunk-card-mini"><strong>Chunk 3:</strong> "Foreign keys enforce referential integrity..." <span class="page-tag">Page 2</span></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- STAGE 3: EMBEDDINGS -->
+                            <div class="pipeline-stage-card" data-stage="3">
+                                <div class="stage-num-badge">STAGE 3</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>✦ Embeddings</h4>
+                                        <span class="stage-tech-tag">all-MiniLM-L6-v2 (384-d)</span>
+                                    </div>
+                                    <p class="stage-desc">Each chunk is converted into a numerical representation so related meaning can be found through vector distance rather than only identical wording.</p>
+                                    <div class="stage-visual-box embedding-visual">
+                                        <div class="vector-preview-row">
+                                            <span class="vector-label">Text chunk</span>
+                                            <span class="vector-arrow">&rarr;</span>
+                                            <code class="vector-coords">[ 0.042, -0.183, 0.291, 0.015, ..., -0.076 ] (384 dims)</code>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- STAGE 4: HYBRID RETRIEVAL (MAJOR INTERACTION) -->
+                            <div class="pipeline-stage-card" data-stage="4">
+                                <div class="stage-num-badge">STAGE 4</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>🔎 Hybrid Retrieval</h4>
+                                        <span class="stage-tech-tag">FAISS Dense + BM25 Sparse</span>
+                                    </div>
+                                    <p class="stage-desc">Queries are evaluated across two complementary search paths: FAISS captures semantic synonyms and conceptual relevance, while BM25 guarantees exact keyword and acronym precision.</p>
+
+                                    <!-- Interactive Beam / Split Diagram -->
+                                    <div class="hybrid-diagram-box">
+                                        <div class="diagram-query-node">
+                                            <span class="node-icon">❓</span>
+                                            <strong>User Question</strong>
+                                        </div>
+                                        <div class="diagram-split-branches">
+                                            <div class="branch-path branch-faiss">
+                                                <div class="branch-header">
+                                                    <span class="branch-badge">FAISS (Dense)</span>
+                                                    <span>Semantic Vectors</span>
+                                                </div>
+                                                <p>Matches concepts and paraphrased wording (e.g., "unique row identifier").</p>
+                                            </div>
+                                            <div class="branch-path branch-bm25">
+                                                <div class="branch-header">
+                                                    <span class="branch-badge">BM25 (Sparse)</span>
+                                                    <span>Exact Keywords</span>
+                                                </div>
+                                                <p>Matches exact technical terms, SQL commands, and acronyms (e.g., "PRIMARY KEY").</p>
+                                            </div>
+                                        </div>
+                                        <div class="diagram-merge-node">
+                                            <span class="node-icon">⚡</span>
+                                            <strong>Reciprocal Rank Fusion (Combined Candidates)</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- STAGE 5: RERANKING -->
+                            <div class="pipeline-stage-card" data-stage="5">
+                                <div class="stage-num-badge">STAGE 5</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>🎯 Reranking</h4>
+                                        <span class="stage-tech-tag">Cross-Encoder (bge-reranker-base)</span>
+                                    </div>
+                                    <p class="stage-desc">The strongest retrieved candidates are ranked again for relevance. A deep cross-attention transformer scores the query against each candidate, filtering out false positives.</p>
+                                    <div class="stage-visual-box rerank-visual">
+                                        <div class="rerank-item top-rank">
+                                            <span class="rank-badge">#1 (0.96)</span>
+                                            <span>"Primary keys uniquely identify records in table..."</span>
+                                            <span class="kept-badge">✓ Kept</span>
+                                        </div>
+                                        <div class="rerank-item top-rank">
+                                            <span class="rank-badge">#2 (0.91)</span>
+                                            <span>"Candidate keys and composite primary key definitions..."</span>
+                                            <span class="kept-badge">✓ Kept</span>
+                                        </div>
+                                        <div class="rerank-item low-rank">
+                                            <span class="rank-badge">#8 (0.34)</span>
+                                            <span>"Database installation directory instructions..."</span>
+                                            <span class="dropped-badge">✕ Filtered</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- STAGE 6: CONTEXT COMPRESSION -->
+                            <div class="pipeline-stage-card" data-stage="6">
+                                <div class="stage-num-badge">STAGE 6</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>🧹 Context Compression</h4>
+                                        <span class="stage-tech-tag">Contextual Extractor</span>
+                                    </div>
+                                    <p class="stage-desc">Relevant information is kept while unnecessary text is reduced. Distracting boilerplate, repeated headers, and unrelated paragraphs are compressed out.</p>
+                                    <div class="stage-visual-box compression-visual">
+                                        <div class="comp-box-before">
+                                            <span class="comp-label">Raw Candidates (12,000 characters)</span>
+                                            <div class="comp-bar-large"></div>
+                                        </div>
+                                        <span class="comp-arrow">&rarr;</span>
+                                        <div class="comp-box-after">
+                                            <span class="comp-label">Focused Context (3,400 characters &bull; 71% reduction)</span>
+                                            <div class="comp-bar-small"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- STAGE 7: ANSWER GENERATION -->
+                            <div class="pipeline-stage-card" data-stage="7">
+                                <div class="stage-num-badge">STAGE 7</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>✨ Answer Generation</h4>
+                                        <span class="stage-tech-tag">Google Gemini</span>
+                                    </div>
+                                    <p class="stage-desc">The retrieved context is used to create a grounded response. The model is constrained to use only facts present in the verified context.</p>
+                                    <div class="stage-visual-box gen-visual">
+                                        <div class="gen-box-in">
+                                            <strong>Verified Context</strong>
+                                            <p>"A primary key uniquely identifies each row in a relational database table..."</p>
+                                        </div>
+                                        <span class="gen-arrow">&darr;</span>
+                                        <div class="gen-box-out">
+                                            <strong>Structured Answer</strong>
+                                            <p>"A primary key is an attribute or set of attributes that uniquely identifies each tuple..."</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- STAGE 8: CLAIM VERIFICATION -->
+                            <div class="pipeline-stage-card" data-stage="8">
+                                <div class="stage-num-badge">STAGE 8</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>✓ Verification</h4>
+                                        <span class="stage-tech-tag">Claim Verification Engine</span>
+                                    </div>
+                                    <p class="stage-desc">Claims are checked against the retrieved evidence before the answer is shown. If an unsupported statement is detected, it is removed or flagged.</p>
+                                    <div class="stage-visual-box verif-visual">
+                                        <div class="claim-item claim-supported">
+                                            <span class="claim-status">✓</span>
+                                            <span>"A primary key must be unique across all rows."</span>
+                                            <span class="claim-verdict">Supported</span>
+                                        </div>
+                                        <div class="claim-item claim-supported">
+                                            <span class="claim-status">✓</span>
+                                            <span>"A primary key cannot contain NULL values."</span>
+                                            <span class="claim-verdict">Supported</span>
+                                        </div>
+                                        <div class="claim-item claim-unsupported">
+                                            <span class="claim-status">✕</span>
+                                            <span>"Primary keys were invented by IBM in 1962."</span>
+                                            <span class="claim-verdict">Unsupported (Removed)</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- STAGE 9: CITATIONS -->
+                            <div class="pipeline-stage-card" data-stage="9">
+                                <div class="stage-num-badge">STAGE 9</div>
+                                <div class="stage-body">
+                                    <div class="stage-header-row">
+                                        <h4>📚 Citations</h4>
+                                        <span class="stage-tech-tag">Page-Level Reference Resolver</span>
+                                    </div>
+                                    <p class="stage-desc">Answers include document and page references so users can trace the information back to the source in the embedded PDF viewer.</p>
+                                    <div class="stage-visual-box citation-visual">
+                                        <div class="citation-demo-box">
+                                            <span class="cit-answer-text">"Primary keys enforce entity integrity in relational schemas."</span>
+                                            <div class="cit-link-pill">
+                                                <span>📄</span> <strong>DBMS_Notes.pdf &bull; Page 2</strong>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Mini Interactive Demo -->
+                    <div class="rag-demo-card">
+                        <div class="demo-card-header">
+                            <div>
+                                <span class="demo-badge">INTERACTIVE EDUCATIONAL DEMO</span>
+                                <h3>Educational Pipeline Simulation</h3>
+                                <p>Step through how a real query travels through the RAG stages (no API calls).</p>
+                            </div>
+                            <button type="button" id="btn-run-rag-demo" class="btn btn-primary btn-sm">
+                                <span>▶</span> <span id="btn-rag-demo-text">Step Through Demo</span>
+                            </button>
+                        </div>
+                        <div class="demo-stepper-container" id="demo-stepper-container">
+                            <div class="demo-step active" id="demo-step-1">
+                                <span class="step-num">1</span>
+                                <div class="step-content">
+                                    <strong>Query:</strong>
+                                    <code>"What is a primary key?"</code>
+                                </div>
+                            </div>
+                            <div class="demo-step" id="demo-step-2">
+                                <span class="step-num">2</span>
+                                <div class="step-content">
+                                    <strong>Retrieval &amp; Reranking:</strong>
+                                    <p>FAISS + BM25 find chunk in <strong>DBMS_Notes.pdf (Page 2)</strong> &bull; Score: 96%</p>
+                                </div>
+                            </div>
+                            <div class="demo-step" id="demo-step-3">
+                                <span class="step-num">3</span>
+                                <div class="step-content">
+                                    <strong>Claim Verification:</strong>
+                                    <p>Claim: "Uniquely identifies table records" &bull; <span class="text-success">✓ 100% Verified</span></p>
+                                </div>
+                            </div>
+                            <div class="demo-step" id="demo-step-4">
+                                <span class="step-num">4</span>
+                                <div class="step-content">
+                                    <strong>Final Grounded Answer &amp; Citation:</strong>
+                                    <p>"A primary key uniquely identifies each record in a database table. It cannot be NULL." <span class="citation-pill" style="display:inline-flex; padding:2px 8px; border-radius:12px; font-size:11.5px;">📄 DBMS_Notes.pdf — Page 2</span></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Safe Refusal Explanation Section -->
+                    <div class="rag-refusal-card">
+                        <div class="refusal-card-header">
+                            <span class="refusal-icon">🛡️</span>
+                            <div>
+                                <h3>What happens when the answer isn't in your documents?</h3>
+                                <p class="refusal-sub">Strict hallucination prevention and safe refusal policy.</p>
+                            </div>
+                        </div>
+                        <div class="refusal-content-grid">
+                            <div class="refusal-example-box">
+                                <span class="ex-label">Example Unsupported Question</span>
+                                <p class="ex-query">"What is the capital of Jupiter?"</p>
+                                <span class="ex-arrow">&darr;</span>
+                                <div class="ex-result">
+                                    <span class="ex-badge">NO RELEVANT EVIDENCE FOUND</span>
+                                    <p class="ex-output">"I couldn't find sufficient information about this in the selected documents."</p>
+                                </div>
+                            </div>
+                            <div class="refusal-text-box">
+                                <h4>Avoiding Inventions &amp; Guesswork</h4>
+                                <p>Standard large language models often generate persuasive-sounding fabrications when asked questions outside their immediate training context.</p>
+                                <p>In this system, <strong>adaptive thresholding</strong> and <strong>strict grounding checks</strong> detect when the retrieved candidate similarity is insufficient. Rather than speculating, the assistant politely declines with an actionable refusal.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
         </main>
+    </div>
+
+    <!-- ==========================================================
+         MODALS & INSPECTOR PANELS
+         ========================================================== -->
+
+    <!-- ADVANCED PIPELINE SUBSYSTEMS MODAL (Clutter removed from header) -->
+    <div id="pipeline-details-modal" class="modal-overlay hidden">
+        <div class="modal-backdrop" id="pipeline-modal-backdrop"></div>
+        <div class="modal-dialog pipeline-dialog">
+            <div class="modal-dialog-header">
+                <div class="modal-dialog-title-wrap">
+                    <span class="modal-dialog-icon">⚙️</span>
+                    <h3>RAG Pipeline Architecture &amp; Subsystems</h3>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-pipeline-modal" title="Close">&times;</button>
+            </div>
+            <div class="modal-dialog-body">
+                <p class="modal-intro-text">Real-time status of the multi-stage neural retrieval, ranking, and validation subsystems:</p>
+
+                <div class="pipeline-status-pills" id="pipeline-status-pills">
+                    <span class="status-pill status-pill-hybrid" id="pill-hybrid"><span class="pill-dot">●</span> Hybrid Search</span>
+                    <span class="status-pill status-pill-faiss" id="pill-faiss"><span class="pill-dot">●</span> FAISS Dense</span>
+                    <span class="status-pill status-pill-bm25" id="pill-bm25"><span class="pill-dot">●</span> BM25 Sparse</span>
+                    <span class="status-pill status-pill-reranker" id="pill-reranker"><span class="pill-dot">●</span> Cross-Encoder</span>
+                    <span class="status-pill status-pill-multiquery" id="pill-multiquery"><span class="pill-dot">●</span> Multi-Query</span>
+                    <span class="status-pill status-pill-decomposition" id="pill-decomposition"><span class="pill-dot">●</span> Query Decomposition</span>
+                    <span class="status-pill status-pill-adaptive" id="pill-adaptive"><span class="pill-dot">●</span> Adaptive Retrieval</span>
+                    <span class="status-pill status-pill-compression" id="pill-compression"><span class="pill-dot">●</span> Contextual Compression</span>
+                    <span class="status-pill status-pill-table" id="pill-table"><span class="pill-dot">●</span> Table Extraction</span>
+                    <span class="status-pill status-pill-evaluation" id="pill-evaluation"><span class="pill-dot">●</span> Answer Evaluation</span>
+                    <span class="status-pill status-pill-correction" id="pill-correction"><span class="pill-dot">●</span> Answer Correction</span>
+                </div>
+
+                <div class="pipeline-explainer-list">
+                    <div class="pipeline-item">
+                        <strong>Dense + Sparse Retrieval:</strong> FAISS (384-d semantic vectors) + BM25 (exact keyword token matches) with Reciprocal Rank Fusion.
+                    </div>
+                    <div class="pipeline-item">
+                        <strong>Neural Reranking:</strong> BAAI/bge-reranker-base cross-encoder computes cross-attention scoring between query and candidates.
+                    </div>
+                    <div class="pipeline-item">
+                        <strong>Safety &amp; Grounding:</strong> Fact claim extraction, chunk alignment verification, and strict refusal on out-of-domain queries.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-primary btn-sm" id="btn-close-pipeline-bottom">Close Details</button>
+            </div>
+        </div>
     </div>
 
     <!-- QUESTION DETAIL MODAL / DEEP DIVE INSPECTOR -->
@@ -587,7 +1273,7 @@
                 </div>
                 <button type="button" class="btn-close-modal" id="btn-close-detail-modal" onclick="window.closeQuestionDetail(event)" title="Close inspector">&times;</button>
             </div>
-            
+
             <div class="question-modal-body" id="detail-modal-body">
                 <!-- Dynamically filled by app.js -->
             </div>
@@ -616,9 +1302,8 @@
                 </div>
                 <button class="btn-close-modal" id="btn-close-modal" onclick="window.closeEvidenceViewer(event)" title="Close Evidence Viewer">&times;</button>
             </div>
-            
+
             <div class="source-modal-body">
-                <!-- EVIDENCE METADATA GRID -->
                 <div class="evidence-meta-grid" id="modal-evidence-meta-grid">
                     <div class="ev-meta-item">
                         <span class="ev-meta-label">Chunk ID:</span>
@@ -652,7 +1337,7 @@
                         <span>🔍</span> View PDF at Page
                     </a>
                 </div>
-                
+
                 <div class="source-preview-text" id="modal-preview-text"></div>
                 <div class="evidence-table-preview hidden" id="modal-table-preview"></div>
             </div>
@@ -671,7 +1356,7 @@
         </div>
     </div>
 
-    <!-- DOCUMENT SEARCH MODAL -->
+    <!-- DOCUMENT SEARCH MODAL (Compatibility & Shortcuts) -->
     <div id="search-modal" class="search-modal hidden">
         <div class="search-modal-backdrop" id="search-modal-backdrop"></div>
         <div class="search-modal-content">
@@ -680,45 +1365,21 @@
                     <span class="modal-icon">🔍</span>
                     <div>
                         <h3>Search Documents</h3>
-                        <span class="search-scope-badge" id="search-scope-badge">Searching in 0 selected documents</span>
+                        <span class="search-scope-badge" id="search-modal-scope-badge">Searching in 0 selected documents</span>
                     </div>
                 </div>
                 <button class="btn-close-modal" id="btn-close-search-modal" title="Close Search">&times;</button>
             </div>
             <div class="search-modal-body">
-                <div class="search-input-group">
-                    <span class="search-input-icon">🔍</span>
-                    <input 
-                        type="text" 
-                        id="doc-search-input" 
-                        class="doc-search-input" 
-                        placeholder="Search uploaded documents... (e.g. normalization, DML, ACID)"
-                        autocomplete="off"
-                    />
-                    <button type="button" id="btn-clear-doc-search" class="btn-clear-search hidden" title="Clear search text">&times;</button>
-                </div>
-                <div class="search-quick-chips">
-                    <span class="chips-label">Quick suggestions:</span>
-                    <button type="button" class="search-chip" data-term="DML">DML</button>
-                    <button type="button" class="search-chip" data-term="ACID">ACID</button>
-                    <button type="button" class="search-chip" data-term="normalization">normalization</button>
-                    <button type="button" class="search-chip" data-term="JOIN">JOIN</button>
-                    <button type="button" class="search-chip" data-term="Python">Python</button>
-                </div>
-                <div class="search-results-meta" id="search-results-meta">
-                    <span id="search-status-text">Type a query to search fast across indexed chunks.</span>
-                </div>
-                <div class="search-results-container" id="search-results-container">
-                    <div class="search-empty-state" id="search-empty-state">
-                        <span class="empty-icon">💡</span>
-                        <p>Search indexed documents with zero Gemini LLM latency.</p>
-                    </div>
-                </div>
+                <p>Use the full <strong>Search &amp; Analyze</strong> workspace for expanded controls.</p>
+                <button type="button" class="btn btn-primary btn-sm" onclick="window.location.hash='#search'; document.getElementById('search-modal').classList.add('hidden');">
+                    Go to Search Workspace &rarr;
+                </button>
             </div>
         </div>
     </div>
 
-    <!-- DELETE CONFIRMATION MODAL (Requirement 5) -->
+    <!-- DELETE CONFIRMATION MODAL -->
     <div id="delete-confirm-modal" class="modal-overlay hidden">
         <div class="modal-backdrop" id="delete-modal-backdrop"></div>
         <div class="modal-dialog delete-dialog">
@@ -738,7 +1399,7 @@
                         <span id="delete-modal-docmeta" class="doc-meta-sub">ID: doc_12345678</span>
                     </div>
                 </div>
-                <p class="delete-warning-text">⚠️ This will permanently remove the physical file, all extracted chunks, FAISS vector embeddings, BM25 tokens, and cache entries. It will no longer participate in searches or citations.</p>
+                <p class="delete-warning-text">⚠️ This will permanently remove the document and all associated search data. It will no longer appear in searches or answers.</p>
             </div>
             <div class="modal-dialog-footer">
                 <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-delete">Cancel</button>
@@ -747,7 +1408,7 @@
         </div>
     </div>
 
-    <!-- DUPLICATE UPLOAD / REPLACE MODAL (Requirements 9 & 10) -->
+    <!-- DUPLICATE UPLOAD / REPLACE MODAL -->
     <div id="duplicate-upload-modal" class="modal-overlay hidden">
         <div class="modal-backdrop" id="duplicate-modal-backdrop"></div>
         <div class="modal-dialog duplicate-dialog">
@@ -767,7 +1428,7 @@
                         <span id="duplicate-modal-status" class="doc-meta-sub">Status: Ready (Indexed)</span>
                     </div>
                 </div>
-                <p class="duplicate-subtext">Would you like to keep the existing document or replace it (which will re-process chunks and rebuild embeddings)?</p>
+                <p class="duplicate-subtext">Would you like to keep the existing document or replace it with the new version?</p>
             </div>
             <div class="modal-dialog-footer">
                 <button type="button" class="btn btn-secondary btn-sm" id="btn-duplicate-keep">Keep Existing</button>
@@ -776,7 +1437,61 @@
         </div>
     </div>
 
-    <!-- Scripts -->
+    <!-- Hidden compatibility hooks for existing event queries -->
+    <div style="display: none !important;">
+        <button id="btn-open-search"></button>
+        <button id="btn-sidebar-analytics"></button>
+    </div>
+
+    <!-- Smooth Theme Transition Radial Overlay (Fallback & GPU layer) -->
+    <div id="theme-transition-overlay" class="theme-transition-overlay" aria-hidden="true"></div>
+
+
+    <!-- SESSION RENAME MODAL -->
+    <div id="session-rename-modal" class="modal-overlay hidden">
+        <div class="modal-backdrop" id="session-rename-backdrop"></div>
+        <div class="modal-dialog" style="max-width: 420px;">
+            <div class="modal-dialog-header">
+                <div class="modal-dialog-title-wrap">
+                    <span class="modal-dialog-icon">✏️</span>
+                    <h3>Rename Session</h3>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-session-rename">&times;</button>
+            </div>
+            <div class="modal-dialog-body">
+                <p class="modal-intro-text">Enter a new title for this conversation session:</p>
+                <input type="text" id="session-rename-input" class="search-input-field" style="width: 100%; margin-top: 10px;" placeholder="Session title..." />
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-session-rename">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-confirm-session-rename">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SESSION DELETE MODAL -->
+    <div id="session-delete-modal" class="modal-overlay hidden">
+        <div class="modal-backdrop" id="session-delete-backdrop"></div>
+        <div class="modal-dialog delete-dialog" style="max-width: 440px;">
+            <div class="modal-dialog-header">
+                <div class="modal-dialog-title-wrap">
+                    <span class="modal-dialog-icon">🗑️</span>
+                    <h3>Delete Session?</h3>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-session-delete">&times;</button>
+            </div>
+            <div class="modal-dialog-body">
+                <p class="modal-intro-text">Are you sure you want to delete <strong id="delete-session-title">this session</strong>?</p>
+                <p class="delete-warning-text" style="margin-top: 10px;">⚠️ This will remove the conversation history for this session. Your documents and indexed data are not affected.</p>
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-session-delete">Cancel</button>
+                <button type="button" class="btn btn-danger btn-sm" id="btn-confirm-session-delete">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application JavaScript -->
     <script src="/static/js/app.js"></script>
 </body>
 </html>

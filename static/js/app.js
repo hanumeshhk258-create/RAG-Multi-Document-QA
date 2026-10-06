@@ -4,6 +4,17 @@
  * Fast Hybrid Retrieval, Interactive Source Excerpts, and Markdown Tables/Code Formatting
  */
 
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+window.escapeHtml = escapeHtml;
+
 document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements - Sidebar
     const dropZone = document.getElementById('drop-zone');
@@ -14,7 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnIndexText = document.getElementById('btn-index-text');
     const btnRebuild = document.getElementById('btn-rebuild');
     const btnReset = document.getElementById('btn-reset');
-    
+
     // Selection Controls
     const selectAllCheckbox = document.getElementById('select-all-checkbox');
     const selectedDocCount = document.getElementById('selected-doc-count');
@@ -139,7 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isChecked = selectedDocs.has(doc.filename);
             const cardEl = document.getElementById(`doc-card-${sanitizeId(doc.filename)}`);
             const cbEl = document.getElementById(`doc-cb-${sanitizeId(doc.filename)}`);
-            
+
             if (cardEl) {
                 if (isChecked) {
                     cardEl.classList.add('selected');
@@ -360,7 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function runIndexingProcess(isRebuild = false) {
         if (isProcessing) return;
-        
+
         const pendingOrErrorDocs = allDocumentsList.filter(d => {
             if (isRebuild) return true;
             if (selectedDocs.size > 0) {
@@ -394,7 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setSystemStatusBadge('indexing', `⏳ Indexing ${totalToIndex || 1} document(s)...`);
 
         if (isRebuild) {
-            showAlert('Rebuilding Index...\n→ Processing documents\n→ Creating chunks\n→ Creating embeddings\n→ Building FAISS\n→ Building BM25\n→ Index Ready', 'info');
+            showAlert('Rebuilding Index...\nProcessing documents and updating search index...', 'info');
         } else {
             showAlert(`Extracting text and generating embeddings for ${totalToIndex} document(s)...`, 'info');
         }
@@ -402,7 +413,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const endpoint = isRebuild ? '/api/rebuild' : '/api/index';
             const payload = isRebuild ? {} : { selected_documents: Array.from(selectedDocs) };
-            
+
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -508,8 +519,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 2. Invalidate cached evidence / source results for deleted document
                 if (window.currentSourceCache) {
                     for (const k in window.currentSourceCache) {
-                        if (window.currentSourceCache[k] && 
-                            (window.currentSourceCache[k].document === filename || 
+                        if (window.currentSourceCache[k] &&
+                            (window.currentSourceCache[k].document === filename ||
                              window.currentSourceCache[k].document_id === docId)) {
                             delete window.currentSourceCache[k];
                         }
@@ -553,7 +564,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 5. CLEAR ALL DOCUMENTS
     // =========================================================================
     btnReset.addEventListener('click', async () => {
-        if (!confirm('Are you sure you want to clear ALL uploaded documents and reset the FAISS index?')) {
+        if (!confirm('Are you sure you want to clear all uploaded documents and reset the index?')) {
             return;
         }
 
@@ -637,11 +648,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         modalDocName.textContent = docName;
         modalPageNum.textContent = `Page ${pageNum}`;
-        
+
         if (modalRelBadge) {
             modalRelBadge.textContent = `🎯 ${item.relevancePct || 90}% relevant`;
         }
-        
+
         if (modalPdfLink) {
             modalPdfLink.href = pdfUrl;
             modalPdfLink.textContent = `🔍 View ${docName} at Page ${pageNum}`;
@@ -654,11 +665,11 @@ document.addEventListener('DOMContentLoaded', () => {
             modalFooterPdfBtn.setAttribute('target', '_blank');
             modalFooterPdfBtn.setAttribute('rel', 'noopener noreferrer');
         }
-        
+
         const fullText = item.excerpt || item.snippet || 'No excerpt available for this chunk.';
         const terms = item.matchedTerms || item.query || [];
         modalPreviewText.innerHTML = highlightMatchedTerms(fullText, terms);
-        
+
         sourceModal.classList.remove('hidden');
     };
 
@@ -669,7 +680,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnCloseModal) btnCloseModal.addEventListener('click', closeSourcePreview);
     if (btnCloseModalBottom) btnCloseModalBottom.addEventListener('click', closeSourcePreview);
     if (modalBackdrop) modalBackdrop.addEventListener('click', closeSourcePreview);
-    
+
     if (btnCopyExcerpt) {
         btnCopyExcerpt.addEventListener('click', () => {
             const plainText = modalPreviewText.innerText || modalPreviewText.textContent;
@@ -871,7 +882,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (searchStatusText) {
-                searchStatusText.textContent = `Found ${results.length} relevant chunk${results.length === 1 ? '' : 's'} in ${elapsed}s${isCached}`;
+                searchStatusText.textContent = `Found ${results.length} relevant result${results.length === 1 ? '' : 's'} in ${elapsed}s${isCached}`;
             }
 
             searchResultsContainer.innerHTML = results.map((item, idx) => {
@@ -961,8 +972,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function mapErrorCodeToMessage(errorCode, defaultMsg) {
-        if (!errorCode && defaultMsg) return defaultMsg;
+        // If the backend already provided a meaningful error message, display that actual error
+        if (defaultMsg && typeof defaultMsg === 'string' && defaultMsg.trim().length > 0) {
+            return defaultMsg.trim();
+        }
+        // If no backend error message is available, map the error_code where useful
         switch (errorCode) {
+            case 'VALIDATION_ERROR':
+                return "Invalid request. Please verify your document selection and query.";
             case 'AI_AUTH_ERROR':
                 return "AI authentication failed. Check the API configuration.";
             case 'AI_RATE_LIMIT':
@@ -976,11 +993,11 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'AI_SERVICE_UNAVAILABLE':
                 return "The AI service is temporarily unavailable. Please try again.";
             case 'INTERNAL_SERVER_ERROR':
-                return "An internal server error occurred.";
-            case 'VALIDATION_ERROR':
-                return defaultMsg || "Please select at least one document.";
+                return "An internal server error occurred. Please check the backend server logs.";
+            case 'INITIALIZATION_ERROR':
+                return "Vector database is currently initializing. Please try again in a few moments.";
             default:
-                return defaultMsg || "The AI service is temporarily unavailable. Please try again.";
+                return "The AI service is temporarily unavailable. Please try again.";
         }
     }
 
@@ -1028,10 +1045,10 @@ document.addEventListener('DOMContentLoaded', () => {
         userInput.disabled = true;
 
         const docCount = selectedDocs.size;
-        const initialSearchMsg = docCount === 1 
-            ? '🔎 Searching 1 selected document...' 
+        const initialSearchMsg = docCount === 1
+            ? '🔎 Searching 1 selected document...'
             : `🔎 Searching ${docCount} selected documents...`;
-        
+
         showSearching(true, initialSearchMsg);
         setSystemStatusBadge('searching', '🤖 Searching documents...');
 
@@ -1080,17 +1097,36 @@ document.addEventListener('DOMContentLoaded', () => {
             clearTimeout(timeoutId);
 
             if (!response.ok) {
-                let errorMsg = 'Please select at least one document.';
+                let errorMsg = null;
                 let errorCode = null;
+                let errorSources = [];
+                let timingData = null;
+                let respTime = null;
+                let adaptiveData = null;
+
                 try {
                     const errData = await response.json();
-                    if (errData) {
-                        if (errData.error) errorMsg = errData.error;
-                        if (errData.error_code) errorCode = errData.error_code;
+                    if (errData && typeof errData === 'object') {
+                        errorMsg = errData.error || errData.message || null;
+                        errorCode = errData.error_code || null;
+                        if (errData.sources) errorSources = errData.sources;
+                        if (errData.timing_breakdown) timingData = errData.timing_breakdown;
+                        if (errData.response_time) respTime = errData.response_time;
+                        if (errData.adaptive_retrieval) adaptiveData = errData.adaptive_retrieval;
                     }
                 } catch (_) {}
-                const finalMsg = mapErrorCodeToMessage(errorCode, errorMsg);
-                appendAIFailureMessage(finalMsg, [], null, null, null, query);
+
+                const finalMsg = errorMsg
+                    ? mapErrorCodeToMessage(errorCode, errorMsg)
+                    : (errorCode
+                        ? mapErrorCodeToMessage(errorCode, null)
+                        : (response.status === 400
+                            ? "Invalid request. Please check your query and document selection."
+                            : (response.status >= 500
+                                ? `Server error (HTTP ${response.status}). Please check the backend logs.`
+                                : `Request failed with status ${response.status}.`)));
+
+                appendAIFailureMessage(finalMsg, errorSources, timingData, respTime, adaptiveData, query);
                 return;
             }
 
@@ -1099,7 +1135,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Handle backend structured failure response
             if (data.success === false || data.generation_failed === true) {
                 const errorCode = data.error_code;
-                const rawError = data.error;
+                const rawError = data.error || data.message;
                 const finalMsg = mapErrorCodeToMessage(errorCode, rawError);
                 appendAIFailureMessage(
                     finalMsg,
@@ -1139,8 +1175,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const structuredData = data.structured_data || null;
 
                 appendAIMessage(
-                    finalVerifiedAnswer, 
-                    data.sources || [], 
+                    finalVerifiedAnswer,
+                    data.sources || [],
                     data.response_time || (data.timing_breakdown ? data.timing_breakdown.total_sec : null),
                     query,
                     isFollowup,
@@ -1162,23 +1198,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     data.retrieval_stats || (data.evaluation ? data.evaluation.retrieval_stats : {}),
                     data.document_relevance_scores || {}
                 );
-                
+
                 // Track full conversation history with metadata and retrieved context
-                chatHistory.push({ 
-                    role: 'user', 
+                chatHistory.push({
+                    role: 'user',
                     content: query,
                     selected_documents: selectedArray
                 });
-                chatHistory.push({ 
-                    role: 'assistant', 
+                chatHistory.push({
+                    role: 'assistant',
                     content: finalVerifiedAnswer,
                     draft_answer: draftAnswer,
                     mode: isComparison ? 'comparison' : 'normal',
-                    sources: (data.sources || []).map(s => ({ 
-                        document: s.document, 
-                        page: s.page, 
+                    sources: (data.sources || []).map(s => ({
+                        document: s.document,
+                        page: s.page,
                         score: s.score,
-                        relevance_pct: s.relevance_pct 
+                        relevance_pct: s.relevance_pct
                     })),
                     retrieved_context: data.retrieved_context || [],
                     evaluation: data.evaluation || null,
@@ -1200,6 +1236,8 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Chat error:', err);
             if (err.name === 'AbortError') {
                 appendAIFailureMessage('AI response timed out. Please try again.', [], { retrieval_sec: '—', generation_sec: 'timeout', total_sec: 60 }, 60, null, query);
+            } else if (err instanceof TypeError || err instanceof ReferenceError) {
+                appendAIFailureMessage(`Application display error: ${err.message}`, [], null, null, null, query);
             } else {
                 appendAIFailureMessage('The AI service is temporarily unavailable. Please try again.', [], null, null, null, query);
             }
@@ -1365,7 +1403,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!grid) return;
 
         const items = Array.from(grid.querySelectorAll('.source-item'));
-        
+
         items.sort((a, b) => {
             if (sortType === 'relevance') {
                 const scoreA = parseFloat(a.getAttribute('data-relevance') || '0');
@@ -1671,11 +1709,11 @@ document.addEventListener('DOMContentLoaded', () => {
                                 </div>
                                 <div class="hybrid-metric-item">
                                     <span class="h-label">Source Documents:</span>
-                                    <span class="h-val">${escapeHtml((stats.source_documents || (evaluation.sources_used || [])).join(', ') || 'None')}</span>
+                                    <span class="h-val">${escapeHtml(Array.isArray(stats.source_documents) ? stats.source_documents.join(', ') : (Array.isArray(evaluation.sources_used) ? evaluation.sources_used.join(', ') : (stats.source_documents || 'None')))}</span>
                                 </div>
                                 <div class="hybrid-metric-item">
                                     <span class="h-label">Top Relevance Scores:</span>
-                                    <span class="h-val">${stats.top_relevance_scores ? stats.top_relevance_scores.join(', ') : (detailsList.slice(0, 3).map(d => (d.reranker_score || d.score || 0).toFixed(2)).join(', ') || '—')}</span>
+                                    <span class="h-val">${stats.top_relevance_scores ? (Array.isArray(stats.top_relevance_scores) ? stats.top_relevance_scores.join(', ') : (typeof stats.top_relevance_scores === 'object' ? Object.entries(stats.top_relevance_scores).map(([d, s]) => `${d}: ${s}%`).join(' | ') : String(stats.top_relevance_scores))) : (detailsList.slice(0, 3).map(d => (d.reranker_score || d.score || 0).toFixed(2)).join(', ') || '—')}</span>
                                 </div>
                                 <div class="hybrid-metric-item">
                                     <span class="h-label">Cache Status:</span>
@@ -1815,7 +1853,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (riskLevel === 'HIGH') {
             hallWarningHtml = `
                 <div class="hallucination-warning-box risk-high">
-                    <span class="warning-icon">⚠</span> 
+                    <span class="warning-icon">⚠</span>
                     <div>
                         <strong>Potential unsupported information detected.</strong>
                         <p>Some statements in this answer could not be verified against the selected documents.</p>
@@ -1825,14 +1863,14 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (riskLevel === 'MEDIUM') {
             hallWarningHtml = `
                 <div class="hallucination-warning-box risk-med">
-                    <span class="warning-icon">⚠</span> 
+                    <span class="warning-icon">⚠</span>
                     <span>Some claims have limited supporting evidence in the selected documents.</span>
                 </div>
             `;
         } else if (riskLevel === 'LOW' && claimsList.length > 0) {
             hallWarningHtml = `
                 <div class="hallucination-warning-box risk-low">
-                    <span class="warning-icon">✓</span> 
+                    <span class="warning-icon">✓</span>
                     <span>Answer verified against selected documents.</span>
                 </div>
             `;
@@ -2299,7 +2337,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const retries = adaptiveData ? (adaptiveData.retries_performed || 0) : 0;
-        const retryBadge = retries > 0 
+        const retryBadge = retries > 0
             ? `<span class="rp-badge-retry">🔄 ${retries} Retry${retries === 1 ? '' : 's'} Triggered</span>`
             : `<span class="rp-badge-no-retry">✓ High Confidence</span>`;
 
@@ -2584,14 +2622,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function appendAIMessage(
-        answerText, 
-        sources, 
-        responseTime, 
-        userQuery = '', 
-        isFollowup = false, 
-        evaluation = null, 
-        mode = 'normal', 
-        documentsUsed = [], 
+        answerText,
+        sources,
+        responseTime,
+        userQuery = '',
+        isFollowup = false,
+        evaluation = null,
+        mode = 'normal',
+        documentsUsed = [],
         chunksUsed = 0,
         contextTopic = '',
         isDecomposed = false,
@@ -2706,7 +2744,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (uniqueSources.length > 0) {
                 const hasManySources = uniqueSources.length > 4;
                 const topPrimaryStr = primarySource || (uniqueSources[0] ? `${uniqueSources[0].document} — Page ${uniqueSources[0].page}` : '');
-                
+
                 // Group sources by document for Requirement 5
                 const docGroupsMap = new Map();
                 uniqueSources.forEach(s => {
@@ -2798,9 +2836,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const chunkBadge = s.chunksCount > 1 ? `<span class="source-chunks-badge" style="background:rgba(99,102,241,0.15); color:#818cf8; font-size:11px; padding:2px 6px; border-radius:4px;">🧩 ${s.chunksCount} supporting chunks</span>` : '';
                                 const bInfo = getRelevanceBadge(s.relevancePct);
                                 return `
-                                    <div class="source-item ${isHidden ? 'hidden-source' : ''}" 
-                                         data-doc="${escapeHtml(s.document)}" 
-                                         data-page="${s.page}" 
+                                    <div class="source-item ${isHidden ? 'hidden-source' : ''}"
+                                         data-doc="${escapeHtml(s.document)}"
+                                         data-page="${s.page}"
                                          data-relevance="${s.relevancePct}"
                                          style="${isHidden ? 'display: none;' : ''}">
                                         <div class="source-item-top">
@@ -2855,7 +2893,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const breakdownStr = parts.length > 0 ? ` (${parts.join(' | ')})` : '';
             const isHit = (cacheStatus === 'HIT' || cacheStatus === true);
-            const cacheBadge = isHit 
+            const cacheBadge = isHit
                 ? '<span class="cache-badge hit" title="Retrieved instantly from in-memory cache">⚡ CACHE: HIT</span>'
                 : '<span class="cache-badge miss" title="Computed fresh from document index">🔄 CACHE: MISS</span>';
 
@@ -2910,11 +2948,11 @@ document.addEventListener('DOMContentLoaded', () => {
             statusBadge = '<span class="final-verified-badge-tag status-verified">✓ Verified</span>';
         }
 
-        const headerBadge = isDecompositionMode 
-            ? `<span class="ai-header-tag">FINAL ANSWER</span> <span class="decomposition-header-tag" title="Query decomposed into multiple sub-queries">⚡ Query Decomposition</span> ${statusBadge}`
-            : (isComparisonMode 
-                ? `<span class="ai-header-tag">FINAL ANSWER</span> <span class="comparison-header-tag" title="Multi-Document Comparison Mode">🔄 [COMPARISON MODE]</span> ${statusBadge}`
-                : `<span class="ai-header-tag">FINAL ANSWER</span> ${statusBadge}`);
+        const headerBadge = isDecompositionMode
+            ? `<span class="ai-header-tag">ANSWER</span> ${statusBadge}`
+            : (isComparisonMode
+                ? `<span class="ai-header-tag">ANSWER</span> <span class="comparison-header-tag" title="Multi-Document Comparison Mode">🔄 Comparison</span> ${statusBadge}`
+                : `<span class="ai-header-tag">ANSWER</span> ${statusBadge}`);
 
         let comparisonMetaHtml = '';
         if (isComparisonMode && (documentsUsed.length > 0 || chunksUsed > 0 || (sources && sources.length > 0))) {
@@ -2925,7 +2963,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="comparison-meta-row">
                     <span class="comp-meta-item"><strong>Documents Compared:</strong> ${docsCount}</span>
                     <span class="comp-meta-dot">•</span>
-                    <span class="comp-meta-item"><strong>Chunks Used:</strong> ${totalChunks}</span>
+                    <span class="comp-meta-item"><strong>Sections Used:</strong> ${totalChunks}</span>
                     <span class="comp-meta-dot">•</span>
                     <span class="comp-meta-item"><strong>Sources:</strong> ${sourcesCount}</span>
                 </div>
@@ -2959,11 +2997,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         <span class="meta-item-badge ${grndCls}">${escapeHtml(ground)}</span>
                     </div>
                     <div class="summary-meta-item">
-                        <span class="meta-item-label">VERIFICATION</span>
+                        <span class="meta-item-label">ACCURACY</span>
                         <div class="meta-claim-pills">
-                            <span class="pill-sup">✓ ${sup} Supported</span>
+                            <span class="pill-sup">✓ ${sup} Verified</span>
                             ${part > 0 ? `<span class="pill-part">⚠ ${part} Partial</span>` : ''}
-                            ${unsup > 0 ? `<span class="pill-unsup">✕ ${unsup} Unsupported</span>` : ''}
+                            ${unsup > 0 ? `<span class="pill-unsup">✕ ${unsup} Unverified</span>` : ''}
                         </div>
                     </div>
                 </div>
@@ -2990,7 +3028,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 </div>
                 ${comparisonMetaHtml}
-                
+
                 <!-- 1. FINAL ANSWER -->
                 <div class="final-verified-answer-section">
                     <div class="ai-text-body">${renderRichMarkdown(finalAns)}</div>
@@ -3001,28 +3039,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 <!-- 3. CONFIDENCE, GROUNDING & VERIFICATION SUMMARY -->
                 ${topSummaryHtml}
-                
+
                 <!-- 4. STRUCTURED DATA & TABLES (IF APPLICABLE) -->
                 ${structuredDataHtml}
-                
+
                 <!-- 5. RETRIEVAL PROCESS (COLLAPSIBLE) -->
                 ${processHtml}
-                
+
                 <!-- 6. RETRIEVAL ATTEMPTS (COLLAPSIBLE) -->
                 ${attemptsHtml}
-                
+
                 <!-- 7. CONTEXTUAL COMPRESSION (COLLAPSIBLE) -->
                 ${compressionDetailsHtml}
-                
+
                 <!-- 8. ANSWER QUALITY & VERIFICATION (COLLAPSIBLE) -->
                 ${qualityPanelHtml}
-                
+
                 <!-- 9. DETAILED CLAIM VERIFICATION & ANSWER CORRECTION (COLLAPSIBLE) -->
                 ${correctionSectionHtml}
-                
+
                 <!-- 7. PERFORMANCE TIMING BAR -->
                 ${timingHtml}
-                
+
                 <!-- 8. FEEDBACK -->
                 <div class="answer-feedback-row" data-msg-id="${msgId}">
                     <span class="feedback-prompt">Was this answer helpful?</span>
@@ -3043,10 +3081,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function appendAIFailureMessage(
-        errorMessage, 
-        sources = [], 
-        timingBreakdown = null, 
-        responseTime = null, 
+        errorMessage,
+        sources = [],
+        timingBreakdown = null,
+        responseTime = null,
         adaptiveRetrieval = null,
         retryQueryText = ''
     ) {
@@ -3056,7 +3094,7 @@ document.addEventListener('DOMContentLoaded', () => {
         msgDiv.id = msgId;
 
         const isTimeout = errorMessage && (errorMessage.toLowerCase().includes('time limit') || errorMessage.toLowerCase().includes('timeout') || errorMessage.toLowerCase().includes('timed out'));
-        const cleanMsg = isTimeout 
+        const cleanMsg = isTimeout
             ? "Unable to generate the answer within the current time limit."
             : (errorMessage || "Unable to generate the answer within the current time limit.");
 
@@ -3329,7 +3367,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderFileList(documents) {
         fileCountBadge.textContent = `${documents.length} document${documents.length === 1 ? '' : 's'}`;
-        
+
         if (!documents || documents.length === 0) {
             fileList.innerHTML = '<li class="empty-list-item">No documents uploaded yet.</li>';
             return;
@@ -3446,7 +3484,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const headerLine = lines[0];
             const separatorLine = lines[1];
-            
+
             if (!separatorLine.includes('-')) return match;
 
             const parseRow = (rowStr) => {
@@ -3764,13 +3802,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentSortDirection = 'desc';
     let analyticsFilterTerm = '';
 
-    const chartInstances = {
-        responseTime: null,
-        relevance: null,
-        groundingFaithfulness: null,
-        statusDistribution: null,
-        docUsage: null
-    };
+    // Chart.js visualizations cleanly removed for streamlined analytics
 
     // DOM Elements - Analytics
     const btnToggleView = document.getElementById('btn-toggle-view');
@@ -3890,7 +3922,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (mainHeaderTitle) mainHeaderTitle.textContent = '📊 RAG Analytics & Evaluation Dashboard';
         if (mainHeaderSubtitle) mainHeaderSubtitle.textContent = 'Real-time telemetry, grounding evaluation, faithfulness & question audit log';
-        
+
         if (toggleViewIcon) toggleViewIcon.textContent = '💬';
         if (toggleViewText) toggleViewText.textContent = 'Chat View';
         if (btnToggleView) btnToggleView.classList.add('active');
@@ -3905,7 +3937,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (mainHeaderTitle) mainHeaderTitle.textContent = 'RAG Document Assistant';
         if (mainHeaderSubtitle) mainHeaderSubtitle.textContent = 'Multi-document search, smart filtering & conversational follow-ups';
-        
+
         if (toggleViewIcon) toggleViewIcon.textContent = '📊';
         if (toggleViewText) toggleViewText.textContent = 'Analytics';
         if (btnToggleView) btnToggleView.classList.remove('active');
@@ -3922,7 +3954,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             analyticsDataCache = data;
             renderSummaryCards(data.summary || {});
-            renderCharts(data.charts || {});
             renderQuestionHistoryTable();
 
             const syncBadge = document.getElementById('analytics-last-synced');
@@ -4005,300 +4036,13 @@ document.addEventListener('DOMContentLoaded', () => {
             setVal('eval-status-badge', 'Evaluated');
         }
     }
-
-    function renderCharts(chartsData) {
-        if (typeof Chart === 'undefined') {
-            console.warn('Chart.js not loaded yet.');
-            return;
-        }
-
-        const labels = (chartsData.labels && chartsData.labels.length > 0) 
-            ? chartsData.labels 
-            : ['No data yet'];
-
-        const defaultGridColor = 'rgba(255, 255, 255, 0.05)';
-        const defaultTextColor = '#94a3b8';
-
-        // 1. Chart A: Response Time Trend
-        const ctxResp = document.getElementById('chart-response-time');
-        if (ctxResp) {
-            if (chartInstances.responseTime) chartInstances.responseTime.destroy();
-            const respTimes = (chartsData.response_times && chartsData.response_times.length > 0) ? chartsData.response_times : [0];
-
-            chartInstances.responseTime = new Chart(ctxResp, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Response Time (s)',
-                        data: respTimes,
-                        borderColor: '#38bdf8',
-                        backgroundColor: 'rgba(56, 189, 248, 0.12)',
-                        borderWidth: 2.5,
-                        fill: true,
-                        tension: 0.35,
-                        pointBackgroundColor: '#38bdf8',
-                        pointBorderColor: '#0b0f19',
-                        pointBorderWidth: 2,
-                        pointRadius: 4,
-                        pointHoverRadius: 6
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                            titleColor: '#ffffff',
-                            bodyColor: '#38bdf8',
-                            borderColor: 'rgba(56, 189, 248, 0.3)',
-                            borderWidth: 1,
-                            padding: 10
-                        }
-                    },
-                    scales: {
-                        x: {
-                            grid: { color: defaultGridColor },
-                            ticks: { color: defaultTextColor, maxRotation: 45, minRotation: 0, font: { size: 10 } }
-                        },
-                        y: {
-                            beginAtZero: true,
-                            grid: { color: defaultGridColor },
-                            ticks: { color: defaultTextColor, callback: (v) => `${v}s` }
-                        }
-                    }
-                }
-            });
-        }
-
-        // 2. Chart B: Retrieval Relevance
-        const ctxRel = document.getElementById('chart-retrieval-relevance');
-        if (ctxRel) {
-            if (chartInstances.relevance) chartInstances.relevance.destroy();
-            const relData = (chartsData.retrieval_relevances && chartsData.retrieval_relevances.length > 0) ? chartsData.retrieval_relevances : [0];
-
-            chartInstances.relevance = new Chart(ctxRel, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Relevance (%)',
-                        data: relData,
-                        borderColor: '#a855f7',
-                        backgroundColor: 'rgba(168, 85, 247, 0.12)',
-                        borderWidth: 2.5,
-                        fill: true,
-                        tension: 0.35,
-                        pointBackgroundColor: '#a855f7',
-                        pointBorderColor: '#0b0f19',
-                        pointBorderWidth: 2,
-                        pointRadius: 4,
-                        pointHoverRadius: 6
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                            titleColor: '#ffffff',
-                            bodyColor: '#c084fc',
-                            borderColor: 'rgba(168, 85, 247, 0.3)',
-                            borderWidth: 1,
-                            padding: 10
-                        }
-                    },
-                    scales: {
-                        x: {
-                            grid: { color: defaultGridColor },
-                            ticks: { color: defaultTextColor, maxRotation: 45, minRotation: 0, font: { size: 10 } }
-                        },
-                        y: {
-                            min: 0,
-                            max: 100,
-                            grid: { color: defaultGridColor },
-                            ticks: { color: defaultTextColor, callback: (v) => `${v}%` }
-                        }
-                    }
-                }
-            });
-        }
-
-        // 3. Chart C: Groundedness vs Faithfulness
-        const ctxGF = document.getElementById('chart-grounding-faithfulness');
-        if (ctxGF) {
-            if (chartInstances.groundingFaithfulness) chartInstances.groundingFaithfulness.destroy();
-            const groundData = (chartsData.groundedness_scores && chartsData.groundedness_scores.length > 0) ? chartsData.groundedness_scores : [0];
-            const faithData = (chartsData.faithfulness_scores && chartsData.faithfulness_scores.length > 0) ? chartsData.faithfulness_scores : [0];
-
-            chartInstances.groundingFaithfulness = new Chart(ctxGF, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            label: 'Groundedness (%)',
-                            data: groundData,
-                            backgroundColor: 'rgba(16, 185, 129, 0.8)',
-                            borderColor: '#10b981',
-                            borderWidth: 1,
-                            borderRadius: 4
-                        },
-                        {
-                            label: 'Faithfulness (%)',
-                            data: faithData,
-                            backgroundColor: 'rgba(6, 182, 212, 0.8)',
-                            borderColor: '#06b6d4',
-                            borderWidth: 1,
-                            borderRadius: 4
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            labels: { color: '#e2e8f0', font: { size: 11 } }
-                        },
-                        tooltip: {
-                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                            titleColor: '#ffffff',
-                            borderColor: 'rgba(255, 255, 255, 0.1)',
-                            borderWidth: 1,
-                            padding: 10
-                        }
-                    },
-                    scales: {
-                        x: {
-                            grid: { color: defaultGridColor },
-                            ticks: { color: defaultTextColor, maxRotation: 45, minRotation: 0, font: { size: 10 } }
-                        },
-                        y: {
-                            min: 0,
-                            max: 100,
-                            grid: { color: defaultGridColor },
-                            ticks: { color: defaultTextColor, callback: (v) => `${v}%` }
-                        }
-                    }
-                }
-            });
-        }
-
-        // 4. Chart D: Answer Verification Status Distribution
-        const ctxDist = document.getElementById('chart-status-distribution');
-        if (ctxDist) {
-            if (chartInstances.statusDistribution) chartInstances.statusDistribution.destroy();
-            const dist = chartsData.status_distribution || {};
-            const distLabels = ['Verified', 'Partially Supported', 'Unsupported', 'High Risk'];
-            const distCounts = [
-                dist.VERIFIED || 0,
-                dist.PARTIALLY_SUPPORTED || 0,
-                dist.UNSUPPORTED || 0,
-                dist.HIGH_RISK || 0
-            ];
-
-            const totalDist = distCounts.reduce((a, b) => a + b, 0);
-
-            chartInstances.statusDistribution = new Chart(ctxDist, {
-                type: 'doughnut',
-                data: {
-                    labels: distLabels,
-                    datasets: [{
-                        data: totalDist > 0 ? distCounts : [1, 0, 0, 0],
-                        backgroundColor: [
-                            'rgba(16, 185, 129, 0.85)',
-                            'rgba(245, 158, 11, 0.85)',
-                            'rgba(239, 68, 68, 0.85)',
-                            'rgba(244, 63, 94, 0.85)'
-                        ],
-                        borderColor: '#111827',
-                        borderWidth: 2
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'bottom',
-                            labels: { color: '#e2e8f0', font: { size: 11 }, padding: 12 }
-                        },
-                        tooltip: {
-                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                            titleColor: '#ffffff',
-                            padding: 10
-                        }
-                    },
-                    cutout: '65%'
-                }
-            });
-        }
-
-        // 5. Chart E: Document Usage Frequency
-        const ctxDocs = document.getElementById('chart-document-usage');
-        if (ctxDocs) {
-            if (chartInstances.docUsage) chartInstances.docUsage.destroy();
-            const docLabels = (chartsData.doc_usage && chartsData.doc_usage.labels && chartsData.doc_usage.labels.length > 0)
-                ? chartsData.doc_usage.labels
-                : ['No document references yet'];
-            const docCounts = (chartsData.doc_usage && chartsData.doc_usage.counts && chartsData.doc_usage.counts.length > 0)
-                ? chartsData.doc_usage.counts
-                : [0];
-
-            chartInstances.docUsage = new Chart(ctxDocs, {
-                type: 'bar',
-                data: {
-                    labels: docLabels,
-                    datasets: [{
-                        label: 'Times Referenced as Source',
-                        data: docCounts,
-                        backgroundColor: 'rgba(99, 102, 241, 0.8)',
-                        borderColor: '#818cf8',
-                        borderWidth: 1,
-                        borderRadius: 4
-                    }]
-                },
-                options: {
-                    indexAxis: 'y',
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                            titleColor: '#ffffff',
-                            bodyColor: '#a5b4fc',
-                            borderColor: 'rgba(99, 102, 241, 0.3)',
-                            borderWidth: 1,
-                            padding: 10
-                        }
-                    },
-                    scales: {
-                        x: {
-                            beginAtZero: true,
-                            grid: { color: defaultGridColor },
-                            ticks: { color: defaultTextColor, stepSize: 1 }
-                        },
-                        y: {
-                            grid: { color: defaultGridColor },
-                            ticks: { color: '#cbd5e1', font: { size: 11 } }
-                        }
-                    }
-                }
-            });
-        }
-    }
+    // renderCharts removed — analytics charts cleanly decommissioned
 
     function renderQuestionHistoryTable() {
         if (!analyticsTableBody) return;
 
         const allHistory = (analyticsDataCache && analyticsDataCache.history) ? analyticsDataCache.history : [];
-        
+
         // Filter
         let filtered = allHistory;
         if (analyticsFilterTerm) {
@@ -4410,12 +4154,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Normalizer to guarantee complete consistent telemetry schema across all modes
     function normalizeQuestionTelemetry(raw, fallbackId = null) {
         if (!raw) return null;
-        
+
         const qId = raw.id || raw.interaction_id || fallbackId || 1;
         const qText = raw.question || raw.query || raw.user_query || 'Question Detail';
         const finalAns = raw.final_verified_answer || raw.answer || raw.answer_text || 'No answer recorded.';
         const draftAns = raw.draft_answer || raw.answer || raw.answer_text || finalAns;
-        
+
         const evalObj = raw.evaluation || {};
         const ansCorr = raw.answer_correction || evalObj.answer_correction || {};
         const tb = raw.timing_breakdown || evalObj.timing_breakdown || {};
@@ -4529,7 +4273,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const rawParamStr = String(questionParam || '').trim();
-        
+
         // Case B: Check if passed a client message ID or cached interaction key
         if (window.chatInteractionMap && window.chatInteractionMap[rawParamStr]) {
             const cachedObj = window.chatInteractionMap[rawParamStr];
@@ -4732,7 +4476,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             const cardCls = isSupp ? 'supported' : (isPart ? 'partial' : 'removed');
                             const badgeIcon = isSupp ? '✅' : (isPart ? '⚠️' : '❌');
                             const badgeLabel = isSupp ? 'SUPPORTED' : (isPart ? 'PARTIALLY SUPPORTED' : 'NOT SUPPORTED');
-                            
+
                             const claimText = c.claim || c.original_claim || c.text || JSON.stringify(c);
                             const docName = c.document || c.document_name || 'N/A';
                             const pageNum = c.page || c.page_number || 'N/A';
@@ -4800,7 +4544,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         <span class="detail-section-badge">Query Type: ${escapeHtml(q.query_type || 'NORMAL_QUESTION')}</span>
                     </div>
-                    
+
                     <div class="detail-qa-group">
                         <div class="detail-q-block">
                             <span class="detail-label-subtle">User Question</span>
@@ -5351,4 +5095,1083 @@ document.addEventListener('DOMContentLoaded', () => {
             if (searchModal) searchModal.classList.add('hidden');
         }
     });
+
+    // =========================================================================
+    // WORKSPACE & NAVIGATION ROUTER (MULTI-PAGE REDESIGN)
+    // =========================================================================
+    const VALID_VIEWS = ['dashboard', 'documents', 'search', 'chat', 'sessions', 'history', 'analytics', 'rag'];
+    let currentActiveView = 'dashboard';
+
+    // Elements
+    const appLayout = document.querySelector('.app-layout');
+    const appSidebar = document.getElementById('app-sidebar');
+    const btnSidebarCollapse = document.getElementById('btn-sidebar-collapse') || document.getElementById('btn-toggle-sidebar');
+    const btnMobileSidebarToggle = document.getElementById('btn-mobile-sidebar-toggle');
+    const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+    const btnOpenPipelineModal = document.getElementById('btn-open-pipeline-modal');
+    const pipelineModal = document.getElementById('pipeline-details-modal');
+    const pipelineModalBackdrop = document.getElementById('pipeline-modal-backdrop');
+    const btnClosePipelineModal = document.getElementById('btn-close-pipeline-modal');
+    const btnClosePipelineModalBtn = document.getElementById('btn-close-pipeline-modal-btn');
+
+    // Scope & meta elements
+    const navBadgeDocs = document.getElementById('nav-badge-docs');
+    const sidebarMetaDocs = document.getElementById('sidebar-meta-docs');
+    const sidebarMetaChunks = document.getElementById('sidebar-meta-chunks');
+    const chatScopeDocText = document.getElementById('chat-scope-doc-text');
+    const dashStatDocs = document.getElementById('dash-stat-docs');
+    const dashStatChunks = document.getElementById('dash-stat-chunks');
+    const dashStatFaithfulness = document.getElementById('dash-stat-faithfulness');
+    const dashStatStatus = document.getElementById('dash-stat-status');
+    const dashDocTableBody = document.getElementById('dashboard-doc-table-body');
+    const btnDashRebuild = document.getElementById('btn-dash-rebuild');
+
+    // View Header Titles & Subtitles Map
+    const VIEW_META = {
+        dashboard: {
+            title: 'Dashboard',
+            subtitle: 'Overview of your document collection and quick actions'
+        },
+        documents: {
+            title: 'Documents',
+            subtitle: 'Upload and manage your PDF files'
+        },
+        search: {
+            title: 'Search & Explore',
+            subtitle: 'Find passages and keywords across your documents'
+        },
+        chat: {
+            title: 'Document Assistant',
+            subtitle: 'Ask questions about your documents'
+        },
+        sessions: {
+            title: 'Sessions',
+            subtitle: 'Continue your conversations where you left off.'
+        },
+        history: {
+            title: 'History',
+            subtitle: 'Review recent questions and answers'
+        },
+        analytics: {
+            title: 'Analytics',
+            subtitle: 'Performance, accuracy, and usage overview'
+        },
+        rag: {
+            title: 'How RAG Works',
+            subtitle: 'From your documents to grounded answers.'
+        }
+    };
+
+    function navigateToView(viewId, updateHash = true) {
+        if (!VALID_VIEWS.includes(viewId)) {
+            viewId = 'dashboard';
+        }
+        currentActiveView = viewId;
+
+        // 1. Hide all views, unhide selected view
+        VALID_VIEWS.forEach(id => {
+            const sectionEl = document.getElementById(`view-${id}`);
+            if (sectionEl) {
+                if (id === viewId) {
+                    sectionEl.classList.remove('hidden');
+                } else {
+                    sectionEl.classList.add('hidden');
+                }
+            }
+        });
+
+        // Ensure inner sections for chat / analytics are properly unhidden
+        if (viewId === 'chat' && chatViewSection) {
+            chatViewSection.classList.remove('hidden');
+        }
+        if (viewId === 'analytics' && analyticsViewSection) {
+            analyticsViewSection.classList.remove('hidden');
+        }
+
+        // 2. Update navigation active state
+        document.querySelectorAll('.sidebar-nav .nav-item').forEach(link => {
+            const targetView = link.getAttribute('data-view');
+            if (targetView === viewId) {
+                link.classList.add('active');
+            } else {
+                link.classList.remove('active');
+            }
+        });
+
+        // 3. Update topbar title & subtitle
+        const meta = VIEW_META[viewId] || VIEW_META.dashboard;
+        if (mainHeaderTitle) mainHeaderTitle.textContent = meta.title;
+        if (mainHeaderSubtitle) mainHeaderSubtitle.textContent = meta.subtitle;
+
+        // 4. Update URL hash if requested
+        if (updateHash && window.location.hash !== `#${viewId}`) {
+            window.location.hash = `#${viewId}`;
+        }
+
+        // 5. Trigger view-specific render / action
+        if (viewId === 'dashboard') {
+            renderDashboardSummary();
+        } else if (viewId === 'search') {
+            if (typeof updateSearchScopeBadge === 'function') updateSearchScopeBadge();
+            if (docSearchInput) setTimeout(() => docSearchInput.focus(), 100);
+        } else if (viewId === 'chat') {
+            updateChatScopeBadge();
+            if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+        } else if (viewId === 'sessions') {
+            if (typeof renderSessionsPage === 'function') renderSessionsPage();
+        } else if (viewId === 'history') {
+            renderHistoryPage();
+        } else if (viewId === 'analytics') {
+            if (typeof fetchAndRenderAnalytics === 'function') {
+                fetchAndRenderAnalytics();
+            }
+        } else if (viewId === 'rag') {
+            if (typeof initRagWorksPage === 'function') initRagWorksPage();
+        }
+
+        // 6. Close mobile drawer if open
+        if (appSidebar && appSidebar.classList.contains('mobile-open')) {
+            appSidebar.classList.remove('mobile-open');
+            if (sidebarBackdrop) sidebarBackdrop.classList.add('hidden');
+        }
+    }
+    window.navigateToView = navigateToView;
+
+    // Sidebar Collapsing
+    function setSidebarCollapsed(collapsed, save = true) {
+        if (!appLayout || !appSidebar) return;
+        const iconSpan = document.getElementById('collapse-icon');
+        if (collapsed) {
+            appLayout.classList.add('sidebar-collapsed');
+            appSidebar.classList.add('collapsed');
+            if (iconSpan) iconSpan.textContent = '⇥';
+            else if (btnSidebarCollapse) btnSidebarCollapse.innerHTML = '<span>▶</span>';
+        } else {
+            appLayout.classList.remove('sidebar-collapsed');
+            appSidebar.classList.remove('collapsed');
+            if (iconSpan) iconSpan.textContent = '⇤';
+            else if (btnSidebarCollapse) btnSidebarCollapse.innerHTML = '<span>◀</span>';
+        }
+        if (save) {
+            try {
+                localStorage.setItem('rag_sidebar_collapsed', collapsed ? 'true' : 'false');
+            } catch (_) {}
+        }
+    }
+
+    if (btnSidebarCollapse) {
+        btnSidebarCollapse.addEventListener('click', () => {
+            const isCurrentlyCollapsed = appSidebar.classList.contains('collapsed');
+            setSidebarCollapsed(!isCurrentlyCollapsed, true);
+        });
+    }
+
+    // Restore saved sidebar state
+    try {
+        const savedSidebarState = localStorage.getItem('rag_sidebar_collapsed');
+        if (savedSidebarState === 'true') {
+            setSidebarCollapsed(true, false);
+        }
+    } catch (_) {}
+
+    // Mobile Sidebar Drawer
+    if (btnMobileSidebarToggle) {
+        btnMobileSidebarToggle.addEventListener('click', () => {
+            if (appSidebar) {
+                const isOpen = appSidebar.classList.contains('mobile-open');
+                if (isOpen) {
+                    appSidebar.classList.remove('mobile-open');
+                    if (sidebarBackdrop) sidebarBackdrop.classList.add('hidden');
+                } else {
+                    appSidebar.classList.add('mobile-open');
+                    if (sidebarBackdrop) sidebarBackdrop.classList.remove('hidden');
+                }
+            }
+        });
+    }
+
+    if (sidebarBackdrop) {
+        sidebarBackdrop.addEventListener('click', () => {
+            if (appSidebar) appSidebar.classList.remove('mobile-open');
+            sidebarBackdrop.classList.add('hidden');
+        });
+    }
+
+    // Pipeline Details Modal
+    function openPipelineModal() {
+        if (pipelineModal) pipelineModal.classList.remove('hidden');
+    }
+    function closePipelineModal() {
+        if (pipelineModal) pipelineModal.classList.add('hidden');
+    }
+    if (btnOpenPipelineModal) btnOpenPipelineModal.addEventListener('click', openPipelineModal);
+    if (btnClosePipelineModal) btnClosePipelineModal.addEventListener('click', closePipelineModal);
+    if (btnClosePipelineModalBtn) btnClosePipelineModalBtn.addEventListener('click', closePipelineModal);
+    if (pipelineModalBackdrop) pipelineModalBackdrop.addEventListener('click', closePipelineModal);
+
+    // Dashboard Elements
+    const dashMetricDocs = document.getElementById('dash-metric-docs');
+    const dashMetricChunks = document.getElementById('dash-metric-chunks');
+    const dashMetricPagesSub = document.getElementById('dash-metric-pages-sub');
+    const dashMetricQuestions = document.getElementById('dash-metric-questions');
+    const dashDocListPreview = document.getElementById('dash-doc-list-preview');
+
+    // Dashboard Summary Rendering
+    function renderDashboardSummary() {
+        const total = allDocumentsList.length;
+        const totalChunks = allDocumentsList.reduce((acc, d) => acc + (d.chunks || 0), 0);
+        const totalPages = allDocumentsList.reduce((acc, d) => acc + (d.pages || 0), 0);
+
+        if (dashMetricDocs) dashMetricDocs.textContent = total;
+        if (dashMetricChunks) dashMetricChunks.textContent = totalChunks;
+        if (dashMetricPagesSub) dashMetricPagesSub.textContent = `Across ${totalPages} total pages`;
+
+        const questions = (typeof getRecentQuestions === 'function') ? getRecentQuestions() : [];
+        if (dashMetricQuestions) dashMetricQuestions.textContent = questions.length;
+
+        // Render document collection cards in dashboard
+        if (dashDocListPreview) {
+            if (total === 0) {
+                dashDocListPreview.innerHTML = `
+                    <div class="empty-list-placeholder" style="padding: 24px; text-align: center; color: var(--text-muted);">
+                        No documents uploaded yet. Click <a href="#documents" style="color:var(--accent-primary); text-decoration:underline;">Upload & Manage Documents</a> to get started.
+                    </div>
+                `;
+            } else {
+                dashDocListPreview.innerHTML = `
+                    <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px;">
+                        ${allDocumentsList.map(doc => {
+                            const isIndexed = doc.indexed || (doc.status || '').toLowerCase() === 'ready';
+                            const safeName = escapeHtml(doc.filename);
+                            const pages = doc.pages || 1;
+                            const chunks = isIndexed ? (doc.chunks || 0) : 0;
+                            const statusPill = isIndexed
+                                ? `<span class="table-status-pill status-ready" style="font-size:11px; padding:3px 8px;">🟢 Indexed</span>`
+                                : `<span class="table-status-pill status-pending" style="font-size:11px; padding:3px 8px;">🟡 Pending</span>`;
+
+                            return `
+                                <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:8px;">
+                                    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                                        <div style="font-weight:600; font-size:13px; color:var(--text-primary); text-overflow:ellipsis; overflow:hidden; white-space:nowrap; max-width:180px;" title="${safeName}">
+                                            📄 ${safeName}
+                                        </div>
+                                        ${statusPill}
+                                    </div>
+                                    <div style="font-size:12px; color:var(--text-muted); display:flex; gap:12px;">
+                                        <span>📑 ${pages} pages</span>
+                                        <span>📑 ${chunks} sections</span>
+                                    </div>
+                                    <div style="display:flex; gap:8px; margin-top:4px;">
+                                        <button type="button" class="btn btn-secondary btn-sm" onclick="navigateToView('documents')" style="padding:3px 8px; font-size:11px; flex:1;">
+                                            Manage
+                                        </button>
+                                        <button type="button" class="btn btn-ghost btn-sm" onclick="navigateToView('chat')" style="padding:3px 8px; font-size:11px; flex:1;">
+                                            Ask Chat
+                                        </button>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                `;
+            }
+        }
+    }
+    window.renderDashboardSummary = renderDashboardSummary;
+
+    // Chat Scope & Navigation Badges
+    function updateChatScopeBadge() {
+        if (!chatScopeDocText) return;
+        const total = allDocumentsList.length;
+        const selected = selectedDocs.size;
+        if (total === 0) {
+            chatScopeDocText.textContent = 'No documents uploaded';
+        } else if (selected === total) {
+            chatScopeDocText.textContent = `All Documents Active (${total} docs)`;
+        } else if (selected === 0) {
+            chatScopeDocText.textContent = '0 Documents Selected (Check in Documents page)';
+        } else {
+            chatScopeDocText.textContent = `${selected} of ${total} documents selected`;
+        }
+
+        // Also update sidebar badges
+        if (navBadgeDocs) navBadgeDocs.textContent = total;
+        if (sidebarMetaDocs) sidebarMetaDocs.textContent = `${total} Docs`;
+        const totalChunks = allDocumentsList.reduce((acc, d) => acc + (d.chunks || 0), 0);
+        if (sidebarMetaChunks) sidebarMetaChunks.textContent = `${totalChunks} Sections`;
+    }
+
+    // Dashboard Quick Actions
+    const btnDashUpload = document.getElementById('btn-dash-upload');
+    const btnDashSearch = document.getElementById('btn-dash-search');
+    const btnDashChat = document.getElementById('btn-dash-chat');
+    const btnDashAnalytics = document.getElementById('btn-dash-analytics');
+
+    if (btnDashUpload) btnDashUpload.addEventListener('click', () => navigateToView('documents'));
+    if (btnDashSearch) btnDashSearch.addEventListener('click', () => navigateToView('search'));
+    if (btnDashChat) btnDashChat.addEventListener('click', () => navigateToView('chat'));
+    if (btnDashAnalytics) btnDashAnalytics.addEventListener('click', () => navigateToView('analytics'));
+
+    if (btnDashRebuild && btnRebuild) {
+        btnDashRebuild.addEventListener('click', () => {
+            btnRebuild.click();
+        });
+    }
+
+    // =========================================================================
+    // MULTI-SESSION CHAT SUPPORT
+    // =========================================================================
+    const sessionsMemory = {
+        'default': { history: [], html: null },
+        'dbms_prep': { history: [], html: null },
+        'sgcube_research': { history: [], html: null },
+        'sql_revision': { history: [], html: null }
+    };
+    let currentSessionKey = 'default';
+
+    const chatSessionSelect = document.getElementById('chat-session-select');
+    if (chatSessionSelect) {
+        chatSessionSelect.addEventListener('change', (e) => {
+            const newSessionKey = e.target.value;
+            if (newSessionKey === currentSessionKey) return;
+
+            // Save active session
+            if (sessionsMemory[currentSessionKey]) {
+                sessionsMemory[currentSessionKey].history = [...chatHistory];
+                sessionsMemory[currentSessionKey].html = chatMessages ? chatMessages.innerHTML : null;
+            }
+
+            // Switch to new session
+            currentSessionKey = newSessionKey;
+            const target = sessionsMemory[currentSessionKey] || { history: [], html: null };
+            chatHistory = target.history ? [...target.history] : [];
+
+            if (chatMessages) {
+                if (target.html) {
+                    chatMessages.innerHTML = target.html;
+                } else {
+                    const sessionName = e.target.options[e.target.selectedIndex].text;
+                    chatMessages.innerHTML = `
+                        <div class="message system-message" id="welcome-message">
+                            <div class="message-avatar">🤖</div>
+                            <div class="message-content">
+                                <h3>Session: ${escapeHtml(sessionName)}</h3>
+                                <p>This is a separate conversation workspace. Ask questions grounded in your selected documents.</p>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            showAlert(`Switched to session: ${e.target.options[e.target.selectedIndex].text}`, 'info');
+        });
+    }
+
+    // =========================================================================
+    // HISTORY PAGE WORKSPACE LOGIC
+    // =========================================================================
+    const historyCountBadge = document.getElementById('history-count-badge');
+    const historyFilterInput = document.getElementById('history-filter-input');
+
+    function renderHistoryPage() {
+        const questions = (typeof getRecentQuestions === 'function') ? getRecentQuestions() : [];
+        if (historyCountBadge) {
+            historyCountBadge.textContent = `${questions.length} quer${questions.length === 1 ? 'y' : 'ies'} recorded`;
+        }
+
+        const listEl = document.getElementById('recent-questions-list');
+        if (!listEl) return;
+
+        const filterVal = historyFilterInput ? historyFilterInput.value.trim().toLowerCase() : '';
+        const filtered = filterVal
+            ? questions.filter(q => q.toLowerCase().includes(filterVal))
+            : questions;
+
+        if (filtered.length === 0) {
+            listEl.innerHTML = `
+                <li class="empty-recent-item" style="padding:20px; text-align:center; color:var(--text-muted);">
+                    ${filterVal ? 'No history matching "' + escapeHtml(filterVal) + '"' : 'No queries recorded yet. Questions asked in Chat will appear here.'}
+                </li>
+            `;
+            return;
+        }
+
+        listEl.innerHTML = filtered.map((q, idx) => {
+            const safeQ = escapeHtml(q);
+            const escapedForAttr = safeQ.replace(/'/g, "\\'");
+            return `
+                <li class="history-item-row" style="display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid rgba(255,255,255,0.06); gap:14px;">
+                    <div style="display:flex; align-items:center; gap:12px; overflow:hidden; flex:1;">
+                        <span style="font-size:16px;">💬</span>
+                        <span class="history-q-text" style="font-weight:500; color:var(--text-primary); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${safeQ}">
+                            ${safeQ}
+                        </span>
+                    </div>
+                    <div style="display:flex; gap:8px; flex-shrink:0;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="askHistoryQuestionInChat('${escapedForAttr}')" title="Ask this question in Chat">
+                            <span>💬</span> Ask in Chat
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="searchHistoryQuestionInSearch('${escapedForAttr}')" title="Search chunks for this query">
+                            <span>🔍</span> Search Chunks
+                        </button>
+                    </div>
+                </li>
+            `;
+        }).join('');
+    }
+
+    window.askHistoryQuestionInChat = function(queryText) {
+        navigateToView('chat');
+        if (userInput) {
+            userInput.value = queryText;
+            userInput.focus();
+        }
+    };
+
+    window.searchHistoryQuestionInSearch = function(queryText) {
+        navigateToView('search');
+        if (docSearchInput) {
+            docSearchInput.value = queryText;
+            performDocumentSearch(queryText);
+        }
+    };
+
+    if (historyFilterInput) {
+        historyFilterInput.addEventListener('input', () => {
+            renderHistoryPage();
+        });
+    }
+
+    // Setup Nav Item click listeners
+    document.querySelectorAll('.sidebar-nav .nav-item').forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const viewId = link.getAttribute('data-view');
+            navigateToView(viewId, true);
+        });
+    });
+
+    // Hash change event listener
+    window.addEventListener('hashchange', () => {
+        const hash = window.location.hash.replace('#', '');
+        if (VALID_VIEWS.includes(hash) && hash !== currentActiveView) {
+            navigateToView(hash, false);
+        }
+    });
+
+    // Hook existing openAnalyticsView & openChatView into navigateToView
+    openAnalyticsView = function() {
+        navigateToView('analytics', true);
+    };
+
+    openChatView = function() {
+        navigateToView('chat', true);
+    };
+
+    // Hook updateSelectionUI to also refresh navigation badges & chat scope
+    const origUpdateSelectionUI = updateSelectionUI;
+    updateSelectionUI = function() {
+        origUpdateSelectionUI();
+        updateChatScopeBadge();
+        renderDashboardSummary();
+    };
+    // (Initial Route Detection moved to end of setup)
+
+    // =========================================================================
+    // DUAL-THEME SWITCHER & CIRCULAR VIEW TRANSITION
+    // =========================================================================
+    const btnThemeToggle = document.getElementById('btn-theme-toggle');
+    const themeToggleIcon = document.getElementById('theme-toggle-icon');
+    const themeToggleLabel = document.getElementById('theme-toggle-label');
+    const themeTransitionOverlay = document.getElementById('theme-transition-overlay');
+
+    function getCurrentTheme() {
+        return document.documentElement.getAttribute('data-theme') || 'light';
+    }
+
+    function updateThemeToggleUI(theme) {
+        if (!themeToggleIcon || !themeToggleLabel) return;
+        if (theme === 'dark') {
+            themeToggleIcon.textContent = '☀️';
+            themeToggleLabel.textContent = 'Light';
+            if (btnThemeToggle) {
+                btnThemeToggle.setAttribute('aria-label', 'Switch to Light Theme');
+                btnThemeToggle.setAttribute('title', 'Switch to Light Theme (Current: Dark)');
+            }
+        } else {
+            themeToggleIcon.textContent = '🌙';
+            themeToggleLabel.textContent = 'Dark';
+            if (btnThemeToggle) {
+                btnThemeToggle.setAttribute('aria-label', 'Switch to Dark Theme');
+                btnThemeToggle.setAttribute('title', 'Switch to Dark Theme (Current: Light)');
+            }
+        }
+    }
+
+    function applyThemeDirect(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        try {
+            localStorage.setItem('rag_theme', theme);
+        } catch (_) {}
+        updateThemeToggleUI(theme);
+    }
+
+    function toggleTheme(event) {
+        const currentTheme = getCurrentTheme();
+        const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        const isReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        // 1. If reduced motion requested, switch with simple fade without radial animation
+        if (isReducedMotion) {
+            applyThemeDirect(nextTheme);
+            return;
+        }
+
+        // 2. Determine animation origin coordinates
+        let x, y;
+        if (event && typeof event.clientX === 'number' && typeof event.clientY === 'number' && event.clientX > 0 && event.clientY > 0) {
+            x = event.clientX;
+            y = event.clientY;
+        } else if (btnThemeToggle) {
+            const rect = btnThemeToggle.getBoundingClientRect();
+            x = rect.left + rect.width / 2;
+            y = rect.top + rect.height / 2;
+        } else {
+            x = window.innerWidth - 60;
+            y = 32;
+        }
+
+        // Maximum distance to viewport corners
+        const endRadius = Math.hypot(
+            Math.max(x, window.innerWidth - x),
+            Math.max(y, window.innerHeight - y)
+        );
+
+        // 3. Modern Chrome View Transitions API (GPU composited 60fps radial expansion)
+        if (typeof document.startViewTransition === 'function') {
+            const transition = document.startViewTransition(() => {
+                applyThemeDirect(nextTheme);
+            });
+
+            transition.ready.then(() => {
+                const clipPath = [
+                    `circle(0px at ${x}px ${y}px)`,
+                    `circle(${endRadius}px at ${x}px ${y}px)`
+                ];
+                document.documentElement.animate(
+                    {
+                        clipPath: clipPath
+                    },
+                    {
+                        duration: 550,
+                        easing: 'cubic-bezier(0.25, 1, 0.5, 1)',
+                        pseudoElement: '::view-transition-new(root)'
+                    }
+                );
+            }).catch(() => {
+                // In case of transition abort, theme is already set
+            });
+            return;
+        }
+
+        // 4. Elegant Fallback Overlay for browsers without View Transitions
+        if (themeTransitionOverlay) {
+            themeTransitionOverlay.style.background = nextTheme === 'dark' ? '#23262F' : '#FFFFFF';
+            themeTransitionOverlay.style.clipPath = `circle(0px at ${x}px ${y}px)`;
+            themeTransitionOverlay.classList.add('animating');
+
+            requestAnimationFrame(() => {
+                themeTransitionOverlay.style.clipPath = `circle(${endRadius}px at ${x}px ${y}px)`;
+                setTimeout(() => {
+                    applyThemeDirect(nextTheme);
+                    themeTransitionOverlay.classList.remove('animating');
+                    themeTransitionOverlay.style.clipPath = `circle(0px at ${x}px ${y}px)`;
+                }, 500);
+            });
+            return;
+        }
+
+        // Default instant apply
+        applyThemeDirect(nextTheme);
+    }
+    window.toggleTheme = toggleTheme;
+
+    // Attach listeners
+    if (btnThemeToggle) {
+        btnThemeToggle.addEventListener('click', (e) => {
+            toggleTheme(e);
+        });
+
+        btnThemeToggle.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleTheme(e);
+            }
+        });
+    }
+
+    // Initialize toggle UI based on current active theme
+    updateThemeToggleUI(getCurrentTheme());
+
+    // =========================================================================
+    // SESSIONS WORKSPACE IMPLEMENTATION (BROWSER-SAVED SESSION STORAGE)
+    // =========================================================================
+    const SESSIONS_STORAGE_KEY = 'rag_user_sessions_v1';
+    let userSessions = [];
+    let sessionToRenameId = null;
+    let sessionToDeleteId = null;
+
+    function initUserSessions() {
+        try {
+            const stored = localStorage.getItem(SESSIONS_STORAGE_KEY);
+            if (stored) {
+                userSessions = JSON.parse(stored);
+            }
+        } catch (e) {
+            console.warn('Failed to parse sessions from localStorage:', e);
+        }
+
+        if (!userSessions || !Array.isArray(userSessions) || userSessions.length === 0) {
+            // Seed initial sessions
+            userSessions = [
+                {
+                    id: 'default',
+                    title: 'Default Session',
+                    preview: 'General questions and overview of your document library.',
+                    messageCount: 1,
+                    lastActive: Date.now() - 300000,
+                    docCount: (typeof allDocumentsList !== 'undefined') ? allDocumentsList.length : 1,
+                    isPinned: true
+                },
+                {
+                    id: 'dbms_prep',
+                    title: 'DBMS Preparation',
+                    preview: 'Primary keys, candidate keys, normalization and ACID properties.',
+                    messageCount: 12,
+                    lastActive: Date.now() - 600000,
+                    docCount: 1,
+                    isPinned: false
+                },
+                {
+                    id: 'sgcube_research',
+                    title: 'SG CUBE Research',
+                    preview: 'Edge-hybrid dual-mode architecture and computer vision pipeline.',
+                    messageCount: 6,
+                    lastActive: Date.now() - 3600000,
+                    docCount: 1,
+                    isPinned: false
+                },
+                {
+                    id: 'sql_revision',
+                    title: 'SQL Revision',
+                    preview: 'DDL, DML commands, indexing, and relational JOIN operations.',
+                    messageCount: 4,
+                    lastActive: Date.now() - 86400000,
+                    docCount: 1,
+                    isPinned: false
+                }
+            ];
+            saveUserSessions();
+        }
+    }
+
+    function saveUserSessions() {
+        try {
+            localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(userSessions));
+        } catch (e) {
+            console.warn('Failed to persist sessions:', e);
+        }
+    }
+
+    function formatRelativeTime(timestamp) {
+        if (!timestamp) return 'Recently';
+        const diffMs = Date.now() - Number(timestamp);
+        const mins = Math.floor(diffMs / 60000);
+        if (mins < 1) return 'Just now';
+        if (mins < 60) return `${mins} min${mins === 1 ? '' : 's'} ago`;
+        const hours = Math.floor(mins / 60);
+        if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+        const days = Math.floor(hours / 24);
+        return `${days} day${days === 1 ? '' : 's'} ago`;
+    }
+
+    function renderSessionsPage() {
+        initUserSessions();
+        const grid = document.getElementById('sessions-grid-container');
+        const countPill = document.getElementById('sessions-count-pill');
+        const searchInput = document.getElementById('sessions-search-input');
+        if (!grid) return;
+
+        const filterVal = searchInput ? searchInput.value.trim().toLowerCase() : '';
+        let list = [...userSessions];
+
+        if (filterVal) {
+            list = list.filter(s =>
+                (s.title && s.title.toLowerCase().includes(filterVal)) ||
+                (s.preview && s.preview.toLowerCase().includes(filterVal))
+            );
+        }
+
+        // Sort: pinned first, then lastActive descending
+        list.sort((a, b) => {
+            if (a.isPinned && !b.isPinned) return -1;
+            if (!a.isPinned && b.isPinned) return 1;
+            return (b.lastActive || 0) - (a.lastActive || 0);
+        });
+
+        if (countPill) {
+            countPill.textContent = `${list.length} session${list.length === 1 ? '' : 's'}`;
+        }
+
+        if (list.length === 0) {
+            grid.innerHTML = `
+                <div class="empty-sessions-card">
+                    <span class="empty-sessions-icon">💬</span>
+                    <h3>${filterVal ? 'No matching sessions found' : 'No sessions yet'}</h3>
+                    <p>${filterVal ? 'Try adjusting your search query.' : 'Start a new conversation about your documents.'}</p>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="handleCreateNewSession()">
+                        <span>➕</span> New Session
+                    </button>
+                </div>
+            `;
+            return;
+        }
+
+        grid.innerHTML = list.map(s => {
+            const safeTitle = escapeHtml(s.title || 'Untitled Session');
+            const safePreview = escapeHtml(s.preview || 'No conversation preview available.');
+            const msgs = s.messageCount || 0;
+            const docs = s.docCount !== undefined ? s.docCount : (typeof allDocumentsList !== 'undefined' ? allDocumentsList.length : 1);
+            const timeAgo = formatRelativeTime(s.lastActive);
+            const pinIcon = s.isPinned ? '📌' : '';
+            const pinText = s.isPinned ? 'Unpin' : 'Pin to Top';
+
+            return `
+                <div class="session-card ${s.isPinned ? 'pinned-session' : ''}" id="session-card-${s.id}">
+                    <div class="session-card-header">
+                        <div class="session-title-wrap">
+                            <h3 class="session-title">${safeTitle}</h3>
+                            ${s.isPinned ? '<span class="session-pin-badge" title="Pinned session">📌</span>' : ''}
+                        </div>
+                        <div class="session-actions-menu-wrap">
+                            <button type="button" class="btn-session-more" onclick="toggleSessionMenu(event, '${s.id}')" title="Session options">⋯</button>
+                            <div class="session-dropdown-menu hidden" id="session-menu-${s.id}">
+                                <button type="button" class="session-menu-item" onclick="handleOpenRenameModal('${s.id}')">
+                                    <span>✏️</span> Rename
+                                </button>
+                                <button type="button" class="session-menu-item" onclick="handleTogglePinSession('${s.id}')">
+                                    <span>📌</span> ${pinText}
+                                </button>
+                                <button type="button" class="session-menu-item text-danger" onclick="handleOpenDeleteSessionModal('${s.id}')">
+                                    <span>🗑️</span> Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="session-preview-text">${safePreview}</p>
+                    <div class="session-meta-row">
+                        <span class="session-meta-item">💬 ${msgs} message${msgs === 1 ? '' : 's'}</span>
+                        <span class="session-meta-dot">•</span>
+                        <span class="session-meta-item">📄 ${docs} document${docs === 1 ? '' : 's'}</span>
+                    </div>
+                    <div class="session-card-footer">
+                        <span class="session-time-text">Last active ${timeAgo}</span>
+                        <button type="button" class="btn btn-primary btn-sm session-open-btn" onclick="handleOpenSession('${s.id}')">
+                            Open &rarr;
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    window.toggleSessionMenu = function(event, sessionId) {
+        event.stopPropagation();
+        // Close all other menus
+        document.querySelectorAll('.session-dropdown-menu').forEach(m => {
+            if (m.id !== `session-menu-${sessionId}`) m.classList.add('hidden');
+        });
+        const menu = document.getElementById(`session-menu-${sessionId}`);
+        if (menu) menu.classList.toggle('hidden');
+    };
+
+    document.addEventListener('click', () => {
+        document.querySelectorAll('.session-dropdown-menu').forEach(m => m.classList.add('hidden'));
+    });
+
+    window.handleCreateNewSession = function() {
+        const id = 'session_' + Date.now();
+        const num = userSessions.length + 1;
+        const newSession = {
+            id: id,
+            title: `Session ${num}`,
+            preview: 'Fresh conversation ready for questions.',
+            messageCount: 0,
+            lastActive: Date.now(),
+            docCount: (typeof allDocumentsList !== 'undefined') ? allDocumentsList.length : 1,
+            isPinned: false
+        };
+        userSessions.unshift(newSession);
+        saveUserSessions();
+
+        // Also add to sessionsMemory & dropdown if present
+        if (typeof sessionsMemory !== 'undefined') {
+            sessionsMemory[id] = { history: [], html: null };
+            currentSessionKey = id;
+        }
+
+        const chatSelect = document.getElementById('chat-session-select');
+        if (chatSelect) {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = newSession.title;
+            opt.selected = true;
+            chatSelect.appendChild(opt);
+        }
+
+        // Clear active chat messages and navigate to Chat
+        if (chatMessages) {
+            chatMessages.innerHTML = `
+                <div class="message system-message" id="welcome-message">
+                    <div class="message-avatar">💬</div>
+                    <div class="message-content">
+                        <h3>Session: ${escapeHtml(newSession.title)}</h3>
+                        <p>Ask questions grounded in your selected documents.</p>
+                    </div>
+                </div>
+            `;
+        }
+        if (typeof chatHistory !== 'undefined') chatHistory = [];
+        if (userInput) userInput.value = '';
+
+        navigateToView('chat');
+        showAlert(`Created ${newSession.title}`, 'success');
+    };
+
+    window.handleOpenSession = function(sessionId) {
+        const session = userSessions.find(s => s.id === sessionId);
+        if (!session) return;
+
+        session.lastActive = Date.now();
+        saveUserSessions();
+
+        // Set active session in memory
+        if (typeof sessionsMemory !== 'undefined') {
+            currentSessionKey = sessionId;
+            const target = sessionsMemory[sessionId] || { history: [], html: null };
+            chatHistory = target.history ? [...target.history] : [];
+            if (chatMessages) {
+                if (target.html) {
+                    chatMessages.innerHTML = target.html;
+                } else {
+                    chatMessages.innerHTML = `
+                        <div class="message system-message" id="welcome-message">
+                            <div class="message-avatar">💬</div>
+                            <div class="message-content">
+                                <h3>Session: ${escapeHtml(session.title)}</h3>
+                                <p>Continue your conversation grounded in your selected documents.</p>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        const chatSelect = document.getElementById('chat-session-select');
+        if (chatSelect) {
+            let found = false;
+            for (let i = 0; i < chatSelect.options.length; i++) {
+                if (chatSelect.options[i].value === sessionId) {
+                    chatSelect.selectedIndex = i;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                const opt = document.createElement('option');
+                opt.value = session.id;
+                opt.textContent = session.title;
+                opt.selected = true;
+                chatSelect.appendChild(opt);
+            }
+        }
+
+        navigateToView('chat');
+        showAlert(`Opened session: ${session.title}`, 'info');
+    };
+
+    window.handleOpenRenameModal = function(sessionId) {
+        const session = userSessions.find(s => s.id === sessionId);
+        if (!session) return;
+        sessionToRenameId = sessionId;
+        const input = document.getElementById('session-rename-input');
+        const modal = document.getElementById('session-rename-modal');
+        if (input) input.value = session.title;
+        if (modal) modal.classList.remove('hidden');
+        setTimeout(() => { if (input) input.focus(); }, 100);
+    };
+
+    window.handleTogglePinSession = function(sessionId) {
+        const session = userSessions.find(s => s.id === sessionId);
+        if (!session) return;
+        session.isPinned = !session.isPinned;
+        saveUserSessions();
+        renderSessionsPage();
+        showAlert(session.isPinned ? `Pinned ${session.title}` : `Unpinned ${session.title}`, 'info');
+    };
+
+    window.handleOpenDeleteSessionModal = function(sessionId) {
+        const session = userSessions.find(s => s.id === sessionId);
+        if (!session) return;
+        sessionToDeleteId = sessionId;
+        const titleEl = document.getElementById('delete-session-title');
+        const modal = document.getElementById('session-delete-modal');
+        if (titleEl) titleEl.textContent = `"${session.title}"`;
+        if (modal) modal.classList.remove('hidden');
+    };
+
+    // Session Modal Event Listeners
+    const btnConfirmRename = document.getElementById('btn-confirm-session-rename');
+    const btnCancelRename = document.getElementById('btn-cancel-session-rename');
+    const btnCloseRename = document.getElementById('btn-close-session-rename');
+    const sessionRenameModal = document.getElementById('session-rename-modal');
+
+    function closeRenameModal() {
+        if (sessionRenameModal) sessionRenameModal.classList.add('hidden');
+        sessionToRenameId = null;
+    }
+    if (btnCancelRename) btnCancelRename.addEventListener('click', closeRenameModal);
+    if (btnCloseRename) btnCloseRename.addEventListener('click', closeRenameModal);
+    if (btnConfirmRename) {
+        btnConfirmRename.addEventListener('click', () => {
+            const input = document.getElementById('session-rename-input');
+            const newTitle = input ? input.value.trim() : '';
+            if (newTitle && sessionToRenameId) {
+                const s = userSessions.find(x => x.id === sessionToRenameId);
+                if (s) {
+                    s.title = newTitle;
+                    saveUserSessions();
+                    renderSessionsPage();
+                    showAlert('Session renamed successfully.', 'success');
+                }
+            }
+            closeRenameModal();
+        });
+    }
+
+    const btnConfirmDeleteSession = document.getElementById('btn-confirm-session-delete');
+    const btnCancelDeleteSession = document.getElementById('btn-cancel-session-delete');
+    const btnCloseDeleteSession = document.getElementById('btn-close-session-delete');
+    const sessionDeleteModal = document.getElementById('session-delete-modal');
+
+    function closeDeleteSessionModal() {
+        if (sessionDeleteModal) sessionDeleteModal.classList.add('hidden');
+        sessionToDeleteId = null;
+    }
+    if (btnCancelDeleteSession) btnCancelDeleteSession.addEventListener('click', closeDeleteSessionModal);
+    if (btnCloseDeleteSession) btnCloseDeleteSession.addEventListener('click', closeDeleteSessionModal);
+    if (btnConfirmDeleteSession) {
+        btnConfirmDeleteSession.addEventListener('click', () => {
+            if (sessionToDeleteId) {
+                userSessions = userSessions.filter(x => x.id !== sessionToDeleteId);
+                saveUserSessions();
+                renderSessionsPage();
+                showAlert('Session deleted.', 'info');
+            }
+            closeDeleteSessionModal();
+        });
+    }
+
+    // Sessions Search Input & Topbar Buttons
+    const sessionsSearchInput = document.getElementById('sessions-search-input');
+    const btnClearSessionsSearch = document.getElementById('btn-clear-sessions-search');
+    const btnCreateSessionMain = document.getElementById('btn-create-session-main');
+
+    if (sessionsSearchInput) {
+        sessionsSearchInput.addEventListener('input', () => {
+            const val = sessionsSearchInput.value.trim();
+            if (btnClearSessionsSearch) {
+                if (val) btnClearSessionsSearch.classList.remove('hidden');
+                else btnClearSessionsSearch.classList.add('hidden');
+            }
+            renderSessionsPage();
+        });
+    }
+    if (btnClearSessionsSearch) {
+        btnClearSessionsSearch.addEventListener('click', () => {
+            if (sessionsSearchInput) sessionsSearchInput.value = '';
+            btnClearSessionsSearch.classList.add('hidden');
+            renderSessionsPage();
+        });
+    }
+    if (btnCreateSessionMain) {
+        btnCreateSessionMain.addEventListener('click', handleCreateNewSession);
+    }
+
+    // =========================================================================
+    // HOW RAG WORKS WORKSPACE IMPLEMENTATION (INTERACTIVE DEMO & ANIMATIONS)
+    // =========================================================================
+    let ragObserverInitialized = false;
+
+    function initRagWorksPage() {
+        if (ragObserverInitialized) return;
+        ragObserverInitialized = true;
+
+        // 1. IntersectionObserver for stage cards
+        if ('IntersectionObserver' in window) {
+            const isReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            if (!isReducedMotion) {
+                const observer = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            entry.target.classList.add('stage-in-view');
+                        }
+                    });
+                }, { threshold: 0.15 });
+
+                document.querySelectorAll('.pipeline-stage-card').forEach(card => {
+                    observer.observe(card);
+                });
+            } else {
+                document.querySelectorAll('.pipeline-stage-card').forEach(card => {
+                    card.classList.add('stage-in-view');
+                });
+            }
+        }
+
+        // 2. Interactive Stepper Demo Logic
+        let demoStep = 1;
+        const totalDemoSteps = 4;
+        const btnRunDemo = document.getElementById('btn-run-rag-demo');
+        const demoText = document.getElementById('btn-rag-demo-text');
+
+        if (btnRunDemo) {
+            btnRunDemo.addEventListener('click', () => {
+                demoStep = (demoStep % totalDemoSteps) + 1;
+                for (let i = 1; i <= totalDemoSteps; i++) {
+                    const stepEl = document.getElementById(`demo-step-${i}`);
+                    if (stepEl) {
+                        if (i === demoStep) {
+                            stepEl.classList.add('active');
+                        } else {
+                            stepEl.classList.remove('active');
+                        }
+                    }
+                }
+                if (demoText) {
+                    demoText.textContent = demoStep === totalDemoSteps ? 'Reset Demo' : `Step ${demoStep + 1} of 4`;
+                }
+            });
+        }
+    }
+
+    // =========================================================================
+    // INITIAL ROUTE DETECTION ON DOMCONTENTLOADED
+    // =========================================================================
+    const initialHash = window.location.hash.replace('#', '');
+    if (VALID_VIEWS.includes(initialHash)) {
+        navigateToView(initialHash, false);
+    } else {
+        navigateToView('dashboard', false);
+    }
 });

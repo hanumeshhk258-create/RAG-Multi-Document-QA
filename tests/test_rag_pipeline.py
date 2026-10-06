@@ -38,7 +38,7 @@ def create_sample_pdf(filepath: str, text_p1: str, text_p2: str):
         from reportlab.lib.pagesizes import letter
         from reportlab.platypus import SimpleDocTemplate, Paragraph, PageBreak, Spacer
         from reportlab.lib.styles import getSampleStyleSheet
-        
+
         doc = SimpleDocTemplate(filepath, pagesize=letter)
         styles = getSampleStyleSheet()
         story = [
@@ -72,6 +72,14 @@ def run_all_tests():
     print("STARTING COMPREHENSIVE RAG PIPELINE VERIFICATION SUITE")
     print("=" * 70)
 
+    # Setup isolated test directory to prevent modifying developer documents/ or vectorstore/
+    import tempfile
+    temp_test_dir = tempfile.mkdtemp(prefix="rag_pipeline_test_")
+    temp_docs_dir = os.path.join(temp_test_dir, "docs")
+    temp_vs_dir = os.path.join(temp_test_dir, "test_vectorstore")
+    os.makedirs(temp_docs_dir, exist_ok=True)
+    os.makedirs(temp_vs_dir, exist_ok=True)
+
     # 1. Test API key helpers & validation
     print("\n[TEST 1] Testing API Key loading and validation format...")
     key = load_gemini_api_key()
@@ -84,9 +92,9 @@ def run_all_tests():
     print("  API Key format validation verified successfully!")
 
     # 2. Test PDF Creation & Loading
-    test_pdf_1 = os.path.join("documents", "test_sample1.pdf")
-    test_pdf_2 = os.path.join("documents", "test_sample2.pdf")
-    
+    test_pdf_1 = os.path.join(temp_docs_dir, "test_sample1.pdf")
+    test_pdf_2 = os.path.join(temp_docs_dir, "test_sample2.pdf")
+
     create_sample_pdf(
         test_pdf_1,
         "Artificial Intelligence is transforming modern computing architecture.",
@@ -97,8 +105,8 @@ def run_all_tests():
         "Deep learning models rely on dense vector embeddings for semantic similarity.",
         "Vector databases like FAISS enable high-performance nearest neighbor search."
     )
-    print(f"\n[TEST 2] Created 2 multi-page test PDFs in documents/ folder.")
-    
+    print(f"\n[TEST 2] Created 2 multi-page test PDFs in isolated test folder.")
+
     docs1, warnings1 = load_pdf_file(test_pdf_1, "test_sample1.pdf")
     assert len(docs1) == 2, f"Expected 2 pages in test_sample1, got {len(docs1)}"
     assert docs1[0].metadata["page"] == 1
@@ -120,7 +128,7 @@ def run_all_tests():
     class MockUploadedFile:
         def __init__(self, name):
             self.name = name
-    
+
     mock_files = [
         MockUploadedFile("doc1.pdf"),
         MockUploadedFile("doc2.pdf"),
@@ -156,7 +164,7 @@ def run_all_tests():
     vectorstore = build_vectorstore(chunks1, embedding_model, doc_names=["test_sample1.pdf"])
     assert vectorstore is not None
     save_vectorstore(vectorstore, folder_path=test_vs_dir, doc_names=["test_sample1.pdf"], total_chunks=len(chunks1))
-    
+
     # Check saved metadata
     meta = load_vectorstore_metadata(test_vs_dir)
     assert meta["total_documents"] == 1
@@ -218,84 +226,103 @@ def run_all_tests():
 
     # 12. Test Flask REST API Endpoints
     print("\n[TEST 12] Testing Flask Web Application REST API Endpoints...")
+    import app as app_module
     from app import app
     app.config['TESTING'] = True
     client = app.test_client()
 
-    # Test GET /
-    res_home = client.get('/')
-    assert res_home.status_code == 200
-    assert b"RAG Document Assistant" in res_home.data
-    print("  GET / returned index.html successfully.")
+    orig_docs_dir = app_module.DOCUMENTS_DIR
+    orig_vs_dir = app_module.VECTORSTORE_DIR
+    orig_active_vs = app_module.active_vectorstore
 
-    # Test GET /api/status
-    res_status = client.get('/api/status')
-    status_json = res_status.get_json()
-    assert "documents" in status_json or "indexed_documents" in status_json
-    assert "chunks" in status_json or "total_chunks" in status_json
-    assert "vectorstore_ready" in status_json
-    print(f"  GET /api/status returned: {status_json}")
+    app_test_docs = os.path.join(temp_test_dir, "app_docs")
+    app_test_vs = os.path.join(temp_test_dir, "app_vs")
+    os.makedirs(app_test_docs, exist_ok=True)
+    os.makedirs(app_test_vs, exist_ok=True)
 
-    # Test POST /api/upload with sample PDF
-    test_upload_path = os.path.join("documents", "upload_test.pdf")
-    create_sample_pdf(test_upload_path, "Flask REST API serves RAG answers.", "Deep learning powers the modern web.")
-    
-    with open(test_upload_path, "rb") as f:
-        data = {
-            'files': (io.BytesIO(f.read()), 'upload_test.pdf')
-        }
-        res_upload = client.post('/api/upload', data=data, content_type='multipart/form-data')
-        assert res_upload.status_code == 200
-        assert res_upload.get_json()["success"] is True
-        print("  POST /api/upload uploaded test PDF successfully.")
+    app_module.DOCUMENTS_DIR = app_test_docs
+    app_module.VECTORSTORE_DIR = app_test_vs
+    app_module.active_vectorstore = None
 
-    # Test POST /api/index
-    res_index = client.post('/api/index')
-    assert res_index.status_code == 200
-    assert res_index.get_json()["success"] is True
-    print(f"  POST /api/index response: {res_index.get_json()}")
+    try:
+        # Test GET /
+        res_home = client.get('/')
+        assert res_home.status_code == 200
+        assert b"RAG Document Assistant" in res_home.data
+        print("  GET / returned index.html successfully.")
 
-    # Test POST /api/chat
-    res_chat = client.post('/api/chat', json={"question": "What powers the modern web?"})
-    assert res_chat.status_code == 200
-    chat_json = res_chat.get_json()
-    assert chat_json["success"] is True
-    assert "answer" in chat_json
-    assert "response_time" in chat_json
-    print(f"  POST /api/chat answer: {chat_json['answer']}")
-    print(f"  POST /api/chat timing: {chat_json['response_time']}")
-    print(f"  POST /api/chat sources: {chat_json.get('sources')}")
+        # Test GET /api/status
+        res_status = client.get('/api/status')
+        status_json = res_status.get_json()
+        assert "documents" in status_json or "indexed_documents" in status_json
+        assert "chunks" in status_json or "total_chunks" in status_json
+        assert "vectorstore_ready" in status_json
+        print(f"  GET /api/status returned: {status_json}")
 
+        # Test POST /api/upload with sample PDF
+        test_upload_path = os.path.join(temp_test_dir, "upload_test.pdf")
+        create_sample_pdf(test_upload_path, "Flask REST API serves RAG answers.", "Deep learning powers the modern web.")
 
-    # Test GET /api/health
-    res_health = client.get('/api/health')
-    assert res_health.status_code == 200
-    health_json = res_health.get_json()
-    assert health_json.get("status") in ("ok", "ready") or "gemini_configured" in health_json
-    print(f"  GET /api/health returned: {health_json}")
+        with open(test_upload_path, "rb") as f:
+            data = {
+                'files': (io.BytesIO(f.read()), 'upload_test.pdf')
+            }
+            res_upload = client.post('/api/upload', data=data, content_type='multipart/form-data')
+            assert res_upload.status_code == 200
+            assert res_upload.get_json()["success"] is True
+            print("  POST /api/upload uploaded test PDF successfully.")
 
-    # Test GET /api/test-rag
-    res_test_rag = client.get('/api/test-rag')
-    assert res_test_rag.status_code == 200
-    test_rag_json = res_test_rag.get_json()
-    assert "gemini_test" in test_rag_json
-    print(f"  GET /api/test-rag returned: {test_rag_json}")
+        # Test POST /api/index
+        res_index = client.post('/api/index')
+        assert res_index.status_code == 200
+        assert res_index.get_json()["success"] is True
+        print(f"  POST /api/index response: {res_index.get_json()}")
 
-    # Test POST /api/chat with unrelated question (Fallback check)
-    res_unrelated = client.post('/api/chat', json={"question": "What is the capital of Mars?"})
-    assert res_unrelated.status_code == 200
-    unrelated_json = res_unrelated.get_json()
-    assert unrelated_json["success"] is True
-    print(f"  POST /api/chat unrelated question answer: {unrelated_json['answer']}")
+        # Test POST /api/chat
+        res_chat = client.post('/api/chat', json={"question": "What powers the modern web?"})
+        assert res_chat.status_code == 200
+        chat_json = res_chat.get_json()
+        assert chat_json["success"] is True
+        assert "answer" in chat_json
+        assert "response_time" in chat_json
+        print(f"  POST /api/chat answer: {chat_json['answer']}")
+        print(f"  POST /api/chat timing: {chat_json['response_time']}")
+        print(f"  POST /api/chat sources: {chat_json.get('sources')}")
 
-    # Test POST /api/reset
-    res_reset = client.post('/api/reset')
-    assert res_reset.status_code == 200
-    assert res_reset.get_json()["success"] is True
-    print("  POST /api/reset cleared documents and index.")
+        # Test GET /api/health
+        res_health = client.get('/api/health')
+        assert res_health.status_code == 200
+        health_json = res_health.get_json()
+        assert health_json.get("status") in ("ok", "ready") or "gemini_configured" in health_json
+        print(f"  GET /api/health returned: {health_json}")
 
-    if os.path.exists(test_upload_path):
-        os.remove(test_upload_path)
+        # Test GET /api/test-rag
+        res_test_rag = client.get('/api/test-rag')
+        assert res_test_rag.status_code == 200
+        test_rag_json = res_test_rag.get_json()
+        assert "gemini_test" in test_rag_json
+        print(f"  GET /api/test-rag returned: {test_rag_json}")
+
+        # Test POST /api/chat with unrelated question (Fallback check)
+        res_unrelated = client.post('/api/chat', json={"question": "What is the capital of Mars?"})
+        assert res_unrelated.status_code == 200
+        unrelated_json = res_unrelated.get_json()
+        assert unrelated_json["success"] is True
+        print(f"  POST /api/chat unrelated question answer: {unrelated_json['answer']}")
+
+        # Test POST /api/reset (isolated to app_test_docs and app_test_vs)
+        res_reset = client.post('/api/reset')
+        assert res_reset.status_code == 200
+        assert res_reset.get_json()["success"] is True
+        print("  POST /api/reset cleared documents and index in isolated environment.")
+    finally:
+        # Restore original paths so active development state is untouched
+        app_module.DOCUMENTS_DIR = orig_docs_dir
+        app_module.VECTORSTORE_DIR = orig_vs_dir
+        app_module.active_vectorstore = orig_active_vs
+
+    if os.path.exists(temp_test_dir):
+        shutil.rmtree(temp_test_dir, ignore_errors=True)
 
     print("\n" + "=" * 70)
     print("ALL 12 TEST SUITES AND FLASK REST API VERIFIED SUCCESSFULLY!")
