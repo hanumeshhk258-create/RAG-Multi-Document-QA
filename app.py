@@ -8,8 +8,10 @@ import hashlib
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Any, Set
 
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+# Enable HuggingFace offline mode only if explicitly configured
+if os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1", "yes"):
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 from werkzeug.utils import secure_filename
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response
@@ -302,17 +304,30 @@ def get_cached_embeddings():
     """Initializes and caches the shared Hugging Face embedding model."""
     global embedding_model
     if embedding_model is None:
-        logger.info("Initializing Hugging Face Sentence Transformers embedding model...")
-        embedding_model = get_embedding_model("all-MiniLM-L6-v2")
+        try:
+            logger.info("Initializing Hugging Face Sentence Transformers embedding model...")
+            embedding_model = get_embedding_model("all-MiniLM-L6-v2")
+        except Exception as err:
+            logger.error(f"Failed to load embedding model: {err}")
+            return None
     return embedding_model
 
 
 def get_active_vectorstore():
-    """Returns cached active vector store from memory or loads from disk."""
+    """Returns cached active vector store from memory or loads from disk if index exists."""
     global active_vectorstore
     if active_vectorstore is None:
-        emb = get_cached_embeddings()
-        active_vectorstore = load_vectorstore(emb, folder_path=VECTORSTORE_DIR)
+        has_index_files = os.path.exists(os.path.join(VECTORSTORE_DIR, "index.faiss")) or \
+                          os.path.exists(os.path.join(VECTORSTORE_DIR, "index.pkl"))
+        if not has_index_files:
+            return None
+        try:
+            emb = get_cached_embeddings()
+            if emb is not None:
+                active_vectorstore = load_vectorstore(emb, folder_path=VECTORSTORE_DIR)
+        except Exception as err:
+            logger.error(f"Failed to load active vectorstore: {err}")
+            active_vectorstore = None
     return active_vectorstore
 
 
@@ -332,85 +347,121 @@ def get_active_gemini_client():
 
 
 def build_system_status_payload():
-    """Generates a complete status dictionary of the RAG system and all documents with lifecycle status."""
-    api_key = load_gemini_api_key()
-    is_configured = is_valid_api_key_format(api_key)
-    model_name = get_configured_model_name()
+    """
+    Generates a complete status dictionary of the RAG system and all documents with lifecycle status.
+    Executes quickly and safely without triggering heavy neural model downloads or blocking Gunicorn.
+    """
+    try:
+        api_key = load_gemini_api_key()
+        is_configured = is_valid_api_key_format(api_key)
+        model_name = get_configured_model_name()
 
-    meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
-    vs = get_active_vectorstore()
+        meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
 
-    doc_info_list = meta.get("documents_info", [])
-    ready_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Ready"]
-    pending_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Pending"]
-    error_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Error"]
-    indexing_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Indexing"]
+        doc_info_list = meta.get("documents_info", [])
+        ready_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Ready"]
+        pending_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Pending"]
+        error_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Error"]
+        indexing_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Indexing"]
 
-    docs_detail_list = []
-    total_pages_count = 0
-    total_ready_chunks = 0
+        docs_detail_list = []
+        total_pages_count = 0
+        total_ready_chunks = 0
 
-    for doc in doc_info_list:
-        fname = doc.get("filename")
-        fpath = os.path.join(DOCUMENTS_DIR, fname)
-        status = doc.get("status", "Pending")
-        is_ready = (status == "Ready")
-        
-        pages = doc.get("pages", 1)
-        chunks = doc.get("chunks", 0) if is_ready else 0
-        total_pages_count += pages
-        if is_ready:
-            total_ready_chunks += chunks
+        for doc in doc_info_list:
+            fname = doc.get("filename")
+            status = doc.get("status", "Pending")
+            is_ready = (status == "Ready")
+            
+            pages = doc.get("pages", 1)
+            chunks = doc.get("chunks", 0) if is_ready else 0
+            total_pages_count += pages
+            if is_ready:
+                total_ready_chunks += chunks
 
-        docs_detail_list.append({
-            "document_id": doc.get("document_id") or f"doc_{doc.get('file_hash', fname)[:12]}",
-            "filename": fname,
-            "file_hash": doc.get("file_hash", ""),
-            "status": status,
-            "size_kb": doc.get("size_kb", 0),
-            "file_size": doc.get("file_size", 0),
-            "pages": pages,
-            "chunks": chunks,
-            "indexed": is_ready,
-            "uploaded_at": doc.get("uploaded_at"),
-            "indexed_at": doc.get("indexed_at"),
-            "error_message": doc.get("error_message")
-        })
+            docs_detail_list.append({
+                "document_id": doc.get("document_id") or f"doc_{doc.get('file_hash', fname)[:12]}",
+                "filename": fname,
+                "file_hash": doc.get("file_hash", ""),
+                "status": status,
+                "size_kb": doc.get("size_kb", 0),
+                "file_size": doc.get("file_size", 0),
+                "pages": pages,
+                "chunks": chunks,
+                "indexed": is_ready,
+                "uploaded_at": doc.get("uploaded_at"),
+                "indexed_at": doc.get("indexed_at"),
+                "error_message": doc.get("error_message")
+            })
 
-    vectorstore_ready = vs is not None and len(ready_docs) > 0 and meta.get("total_chunks", 0) > 0
+        has_index_files = os.path.exists(os.path.join(VECTORSTORE_DIR, "index.faiss")) or \
+                          os.path.exists(os.path.join(VECTORSTORE_DIR, "index.pkl"))
+        vectorstore_ready = (active_vectorstore is not None or has_index_files) and len(ready_docs) > 0 and meta.get("total_chunks", 0) > 0
 
-    components = {
-        "hybrid_search": bool(vectorstore_ready),
-        "bm25": bool(vectorstore_ready and HAS_RANK_BM25),
-        "faiss": bool(vectorstore_ready),
-        "cross_encoder": bool(_CROSS_ENCODER.is_available()),
-        "multi_query": bool(is_configured),
-        "query_decomposition": bool(is_configured),
-        "adaptive_retrieval": True,
-        "contextual_compression": True,
-        "table_extraction": True,
-        "answer_evaluation": True,
-        "hallucination_detection": True,
-        "answer_correction": True
-    }
+        components = {
+            "hybrid_search": bool(vectorstore_ready),
+            "bm25": bool(vectorstore_ready and HAS_RANK_BM25),
+            "faiss": bool(vectorstore_ready),
+            "cross_encoder": bool(_CROSS_ENCODER.is_available(load_if_uninitialized=False)),
+            "multi_query": bool(is_configured),
+            "query_decomposition": bool(is_configured),
+            "adaptive_retrieval": True,
+            "contextual_compression": True,
+            "table_extraction": True,
+            "answer_evaluation": True,
+            "hallucination_detection": True,
+            "answer_correction": True
+        }
 
-    return {
-        "status": "ready" if vectorstore_ready else ("needs_index" if pending_docs or error_docs else "empty"),
-        "gemini_configured": is_configured,
-        "gemini_model": model_name,
-        "total_documents": len(doc_info_list),
-        "indexed_documents": ready_docs,
-        "indexed_count": len(ready_docs),
-        "pending_count": len(pending_docs),
-        "error_count": len(error_docs),
-        "indexing_count": len(indexing_docs),
-        "total_pages": total_pages_count if total_pages_count > 0 else meta.get("total_pages", 0),
-        "total_chunks": meta.get("total_chunks", total_ready_chunks),
-        "vectorstore_ready": vectorstore_ready,
-        "components": components,
-        "documents": docs_detail_list,
-        "last_updated": meta.get("last_updated")
-    }
+        return {
+            "status": "ready" if vectorstore_ready else ("needs_index" if pending_docs or error_docs else "empty"),
+            "gemini_configured": is_configured,
+            "gemini_model": model_name,
+            "total_documents": len(doc_info_list),
+            "indexed_documents": ready_docs,
+            "indexed_count": len(ready_docs),
+            "pending_count": len(pending_docs),
+            "error_count": len(error_docs),
+            "indexing_count": len(indexing_docs),
+            "total_pages": total_pages_count if total_pages_count > 0 else meta.get("total_pages", 0),
+            "total_chunks": meta.get("total_chunks", total_ready_chunks),
+            "vectorstore_ready": vectorstore_ready,
+            "components": components,
+            "documents": docs_detail_list,
+            "last_updated": meta.get("last_updated")
+        }
+    except Exception as e:
+        logger.error(f"Error generating system status payload: {e}")
+        return {
+            "status": "empty",
+            "gemini_configured": True,
+            "gemini_model": "gemini-3.5-flash-lite",
+            "total_documents": 0,
+            "indexed_documents": [],
+            "indexed_count": 0,
+            "pending_count": 0,
+            "error_count": 0,
+            "indexing_count": 0,
+            "total_pages": 0,
+            "total_chunks": 0,
+            "vectorstore_ready": False,
+            "components": {
+                "hybrid_search": False,
+                "bm25": True,
+                "faiss": False,
+                "cross_encoder": True,
+                "multi_query": True,
+                "query_decomposition": True,
+                "adaptive_retrieval": True,
+                "contextual_compression": True,
+                "table_extraction": True,
+                "answer_evaluation": True,
+                "hallucination_detection": True,
+                "answer_correction": True
+            },
+            "documents": [],
+            "last_updated": None
+        }
 
 
 # =============================================================================
@@ -524,144 +575,159 @@ def upload_files():
     Accepts 1, 2, 5, 10+ PDF files, validates them, computes hashes, and saves them with 'Pending' status.
     Implements duplicate document detection (SHA-256) and support for document replacement.
     """
-    if 'files' not in request.files:
-        return jsonify({"success": False, "error": "No files found in upload request."}), 400
+    try:
+        os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+        os.makedirs(VECTORSTORE_DIR, exist_ok=True)
 
-    files = request.files.getlist('files')
-    if not files or all(f.filename == '' for f in files):
-        return jsonify({"success": False, "error": "No files selected."}), 400
+        if 'files' not in request.files:
+            return jsonify({"success": False, "error": "No files found in upload request."}), 400
 
-    is_replace = (
-        request.form.get("replace", "").strip().lower() in ("true", "1", "yes") or
-        request.args.get("replace", "").strip().lower() in ("true", "1", "yes")
-    )
+        files = request.files.getlist('files')
+        if not files or all(f.filename == '' for f in files):
+            return jsonify({"success": False, "error": "No files selected."}), 400
 
-    meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
-    doc_info_map = {d["filename"]: d for d in meta.get("documents_info", [])}
+        is_replace = (
+            request.form.get("replace", "").strip().lower() in ("true", "1", "yes") or
+            request.args.get("replace", "").strip().lower() in ("true", "1", "yes")
+        )
 
-    saved_files = []
-    errors = []
-    warnings = []
+        meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
+        doc_info_map = {d["filename"]: d for d in meta.get("documents_info", [])}
 
-    for file in files:
-        if not file.filename:
-            continue
+        saved_files = []
+        errors = []
+        warnings = []
 
-        raw_filename = os.path.basename(file.filename)
-        filename = secure_filename(raw_filename)
-        if not filename:
-            filename = "uploaded_document.pdf"
+        for file in files:
+            if not file.filename:
+                continue
 
-        if not filename.lower().endswith('.pdf'):
-            errors.append(f"'{raw_filename}' is not a PDF file.")
-            continue
+            raw_filename = os.path.basename(file.filename)
+            filename = secure_filename(raw_filename)
+            if not filename:
+                filename = "uploaded_document.pdf"
 
-        file_path = os.path.join(DOCUMENTS_DIR, filename)
+            if not filename.lower().endswith('.pdf'):
+                errors.append(f"'{raw_filename}' is not a PDF file.")
+                continue
+
+            file_path = os.path.join(DOCUMENTS_DIR, filename)
+
+            try:
+                file_bytes = file.read()
+                if not file_bytes:
+                    errors.append(f"'{filename}' is empty.")
+                    continue
+
+                file_hash = hashlib.sha256(file_bytes).hexdigest()
+                doc_id = f"doc_{file_hash[:12]}"
+
+                # Duplicate Document Detection (Requirement 9 & 10)
+                existing_doc = None
+                for d in doc_info_map.values():
+                    if d.get("file_hash") == file_hash or d.get("filename") == filename:
+                        existing_doc = d
+                        break
+
+                if existing_doc and not is_replace:
+                    logger.info(f"[UPLOAD] Duplicate detected for '{filename}' (hash: {file_hash[:12]}). Prompting replace or keep.")
+                    return jsonify({
+                        "success": False,
+                        "is_duplicate": True,
+                        "filename": filename,
+                        "existing_document": existing_doc,
+                        "message": "This document is already uploaded."
+                    }), 200
+
+                # If replacing an existing document, delete previous version
+                if existing_doc and is_replace:
+                    logger.info(f"[UPLOAD] Replacing existing document '{existing_doc.get('filename')}' with new upload.")
+                    old_file_path = os.path.join(DOCUMENTS_DIR, existing_doc.get("filename", filename))
+                    if os.path.exists(old_file_path) and old_file_path != file_path:
+                        try:
+                            os.remove(old_file_path)
+                        except Exception as fe:
+                            logger.warning(f"Failed to remove old file {old_file_path}: {fe}")
+                    doc_info_map.pop(existing_doc.get("filename", filename), None)
+
+                # Save file to disk
+                with open(file_path, "wb") as f_out:
+                    f_out.write(file_bytes)
+
+                # Validate PDF readability
+                info = get_pdf_info(file_path, filename)
+                if info["page_count"] == 0:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    errors.append(f"'{filename}' has 0 pages or is invalid.")
+                    continue
+
+                doc_entry = {
+                    "document_id": doc_id,
+                    "filename": filename,
+                    "file_hash": file_hash,
+                    "status": "Pending",  # Uploaded documents enter Pending status
+                    "pages": info["page_count"],
+                    "chunks": 0,
+                    "size_kb": info["size_kb"],
+                    "file_size": len(file_bytes),
+                    "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "indexed_at": None,
+                    "error_message": None
+                }
+
+                doc_info_map[filename] = doc_entry
+                saved_files.append(doc_entry)
+                logger.info(f"Saved uploaded PDF [Pending]: {filename} (ID: {doc_id}, {info['page_count']} pages, {info['size_kb']} KB)")
+
+            except Exception as err:
+                logger.error(f"Error saving file '{filename}': {str(err)}")
+                errors.append(f"Failed to save '{filename}': {str(err)}")
+
+        # Update metadata registry
+        meta["documents_info"] = list(doc_info_map.values())
+        meta["total_documents"] = len(doc_info_map)
+        meta["total_pages"] = sum(d.get("pages", 0) for d in doc_info_map.values())
+        ready_list = [d["filename"] for d in doc_info_map.values() if d.get("status") == "Ready"]
+        meta["indexed_documents"] = ready_list
+        meta["total_indexed"] = len(ready_list)
+        meta["total_pending"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Pending")
+        meta["total_error"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Error")
+        _save_metadata_dict(VECTORSTORE_DIR, meta)
+
+        if saved_files:
+            clear_search_cache()
+            clear_rag_response_cache()
+
+        if not saved_files and errors:
+            return jsonify({
+                "success": False,
+                "error": "No valid PDF files could be saved.",
+                "details": errors
+            }), 400
 
         try:
-            file_bytes = file.read()
-            if not file_bytes:
-                errors.append(f"'{filename}' is empty.")
-                continue
+            status_payload = build_system_status_payload()
+        except Exception as se:
+            logger.warning(f"Failed to generate status payload: {se}")
+            status_payload = {}
 
-            file_hash = hashlib.sha256(file_bytes).hexdigest()
-            doc_id = f"doc_{file_hash[:12]}"
+        return jsonify({
+            "success": True,
+            "files": [f["filename"] for f in saved_files],
+            "uploaded_count": len(saved_files),
+            "details": saved_files,
+            "warnings": warnings,
+            "errors": errors,
+            "status": status_payload
+        })
 
-            # Duplicate Document Detection (Requirement 9 & 10)
-            existing_doc = None
-            for d in doc_info_map.values():
-                if d.get("file_hash") == file_hash or d.get("filename") == filename:
-                    existing_doc = d
-                    break
-
-            if existing_doc and not is_replace:
-                # Return duplicate notification to prompt user in UI
-                logger.info(f"[UPLOAD] Duplicate detected for '{filename}' (hash: {file_hash[:12]}). Prompting replace or keep.")
-                return jsonify({
-                    "success": False,
-                    "is_duplicate": True,
-                    "filename": filename,
-                    "existing_document": existing_doc,
-                    "message": "This document is already uploaded."
-                }), 200
-
-            # If replacing an existing document, delete previous version
-            if existing_doc and is_replace:
-                logger.info(f"[UPLOAD] Replacing existing document '{existing_doc.get('filename')}' with new upload.")
-                old_file_path = os.path.join(DOCUMENTS_DIR, existing_doc.get("filename", filename))
-                if os.path.exists(old_file_path) and old_file_path != file_path:
-                    try:
-                        os.remove(old_file_path)
-                    except Exception as fe:
-                        logger.warning(f"Failed to remove old file {old_file_path}: {fe}")
-                # Remove from map temporarily to refresh
-                doc_info_map.pop(existing_doc.get("filename", filename), None)
-
-            # Save file to disk
-            with open(file_path, "wb") as f_out:
-                f_out.write(file_bytes)
-
-            # Validate PDF readability
-            info = get_pdf_info(file_path, filename)
-            if info["page_count"] == 0:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                errors.append(f"'{filename}' has 0 pages or is invalid.")
-                continue
-
-            doc_entry = {
-                "document_id": doc_id,
-                "filename": filename,
-                "file_hash": file_hash,
-                "status": "Pending",  # Uploaded documents enter Pending status
-                "pages": info["page_count"],
-                "chunks": 0,
-                "size_kb": info["size_kb"],
-                "file_size": len(file_bytes),
-                "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "indexed_at": None,
-                "error_message": None
-            }
-
-            doc_info_map[filename] = doc_entry
-            saved_files.append(doc_entry)
-            logger.info(f"Saved uploaded PDF [Pending]: {filename} (ID: {doc_id}, {info['page_count']} pages, {info['size_kb']} KB)")
-
-        except Exception as err:
-            logger.error(f"Error saving file '{filename}': {str(err)}")
-            errors.append(f"Failed to save '{filename}': {str(err)}")
-
-    # Update metadata registry
-    meta["documents_info"] = list(doc_info_map.values())
-    meta["total_documents"] = len(doc_info_map)
-    meta["total_pages"] = sum(d.get("pages", 0) for d in doc_info_map.values())
-    ready_list = [d["filename"] for d in doc_info_map.values() if d.get("status") == "Ready"]
-    meta["indexed_documents"] = ready_list
-    meta["total_indexed"] = len(ready_list)
-    meta["total_pending"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Pending")
-    meta["total_error"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Error")
-    _save_metadata_dict(VECTORSTORE_DIR, meta)
-
-    if saved_files:
-        clear_search_cache()
-        clear_rag_response_cache()
-
-    if not saved_files and errors:
+    except Exception as top_err:
+        logger.exception(f"Unhandled error in upload_files: {top_err}")
         return jsonify({
             "success": False,
-            "error": "No valid PDF files could be saved.",
-            "details": errors
-        }), 400
-
-    return jsonify({
-        "success": True,
-        "files": [f["filename"] for f in saved_files],
-        "uploaded_count": len(saved_files),
-        "details": saved_files,
-        "warnings": warnings,
-        "errors": errors,
-        "status": build_system_status_payload()
-    })
+            "error": f"Failed to upload document: {str(top_err)}"
+        }), 500
 
 
 # =============================================================================

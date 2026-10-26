@@ -476,7 +476,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 method: 'POST',
                 body: formData
             });
-            const data = await response.json();
+
+            let data;
+            try {
+                data = await response.json();
+            } catch (jsonErr) {
+                const text = await response.text().catch(() => '');
+                throw new Error(response.status === 502 
+                    ? 'Server temporarily unavailable (502 Bad Gateway). Please retry in a moment.' 
+                    : `Server returned HTTP ${response.status}: ${text.slice(0, 120) || response.statusText}`);
+            }
 
             if (data.is_duplicate && !replace) {
                 openDuplicateModal(file, data.existing_document, data.message);
@@ -492,7 +501,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 showAlert(data.error || 'Failed to upload document.', 'error');
             }
         } catch (err) {
-            showAlert('Network error while uploading file.', 'error');
+            const msg = (err && err.message) ? err.message : 'Network error while uploading file.';
+            showAlert(msg, 'error');
             console.error('Upload single file error:', err);
         }
     }
@@ -539,7 +549,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 method: 'POST',
                 body: formData
             });
-            const data = await response.json();
+
+            let data;
+            try {
+                data = await response.json();
+            } catch (jsonErr) {
+                const text = await response.text().catch(() => '');
+                throw new Error(response.status === 502 
+                    ? 'Server temporarily unavailable (502 Bad Gateway). Please retry in a moment.' 
+                    : `Server returned HTTP ${response.status}: ${text.slice(0, 120) || response.statusText}`);
+            }
 
             if (data.is_duplicate && !replace) {
                 const dupFile = validPdfs.find(f => f.name === data.filename) || validPdfs[0];
@@ -558,7 +577,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 showAlert(data.error || 'Failed to upload documents.', 'error');
             }
         } catch (err) {
-            showAlert('Network error while uploading documents.', 'error');
+            const msg = (err && err.message) ? err.message : 'Network error while uploading documents.';
+            showAlert(msg, 'error');
             console.error('Upload error:', err);
         } finally {
             if (fileInput) fileInput.value = '';
@@ -3355,8 +3375,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // =========================================================================
     async function fetchSystemStatus() {
         try {
-            const res = await fetch('/api/status');
-            if (!res.ok) throw new Error('Status endpoint returned error');
+            let res = await fetch('/api/status');
+            if (!res.ok) {
+                // Secondary check: verify if service is healthy
+                const hRes = await fetch('/healthz').catch(() => null);
+                if (hRes && hRes.ok) {
+                    setSystemStatusBadge('empty', '🟡 Standby');
+                    return;
+                }
+                throw new Error(`Status returned HTTP ${res.status}`);
+            }
             const data = await res.json();
 
             // Status Counters

@@ -4,8 +4,10 @@ import math
 import time
 import logging
 
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+# Enable HuggingFace offline mode only if explicitly configured
+if os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1", "yes"):
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional, Dict, Any, Set
@@ -220,10 +222,10 @@ class CrossEncoderManager:
             self._available = False
         return self._model
 
-    def is_available(self) -> bool:
-        if not self._initialized:
+    def is_available(self, load_if_uninitialized: bool = True) -> bool:
+        if not self._initialized and load_if_uninitialized:
             self.load_model()
-        return self._available
+        return self._available if self._initialized else True
 
     def score_pairs(self, pairs: List[Tuple[str, str]]) -> Optional[List[float]]:
         if not pairs:
