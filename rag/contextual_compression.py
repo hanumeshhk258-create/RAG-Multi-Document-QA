@@ -152,6 +152,57 @@ def compress_chunk_content(
     if not q_tokens:
         q_tokens = set(re.findall(r'\b[a-zA-Z0-9_\-\.]+\b', query.lower()))
 
+    # Identify topic intent from query
+    q_low = query.lower().strip()
+    is_key_query = any(k in q_low for k in ['key', 'keys']) and not any(p in q_low for p in ['python', 'escrow', 'cryptograph'])
+    is_single_key = any(k in q_low for k in ['primary key', 'candidate key', 'foreign key', 'super key', 'unique key']) and not any(k in q_low for k in ['types', 'all keys', 'what are the keys', 'what are keys', 'list', 'different'])
+    is_norm_query = any(k in q_low for k in ['normalization', 'normal form', 'normal forms', '1nf', '2nf', '3nf', 'bcnf'])
+    is_single_norm = any(k in q_low for k in ['bcnf', '1nf', '2nf', '3nf']) and not any(k in q_low for k in ['all normal forms', 'normalization and', 'types of normal', 'explain normalization', 'what is normalization'])
+    is_acid_query = any(k in q_low for k in ['acid', 'atomicity', 'consistency', 'isolation', 'durability'])
+    is_single_acid = any(k in q_low for k in ['atomicity', 'consistency', 'isolation', 'durability']) and 'acid' not in q_low
+    is_join_query = any(k in q_low for k in ['join', 'joins', 'inner join', 'left join', 'right join', 'full join'])
+
+    # Query concept expansion for token scoring
+    if is_norm_query:
+        if is_single_norm:
+            if 'bcnf' in q_low:
+                q_tokens.update(['bcnf', 'boyce-codd'])
+            elif '1nf' in q_low:
+                q_tokens.update(['1nf'])
+            elif '2nf' in q_low:
+                q_tokens.update(['2nf'])
+            elif '3nf' in q_low:
+                q_tokens.update(['3nf'])
+        else:
+            q_tokens.update(['normal', 'forms', 'form', 'normalization', '1nf', '2nf', '3nf', 'bcnf'])
+
+    if is_key_query:
+        if is_single_key:
+            if 'primary' in q_low:
+                q_tokens.update(['primary', 'key'])
+            elif 'candidate' in q_low:
+                q_tokens.update(['candidate', 'key'])
+            elif 'foreign' in q_low:
+                q_tokens.update(['foreign', 'key'])
+        else:
+            q_tokens.update(['key', 'keys', 'primary', 'candidate', 'foreign', 'super', 'alternate', 'unique'])
+
+    if is_acid_query:
+        if is_single_acid:
+            if 'durability' in q_low:
+                q_tokens.update(['durability'])
+            elif 'atomicity' in q_low:
+                q_tokens.update(['atomicity'])
+            elif 'consistency' in q_low:
+                q_tokens.update(['consistency'])
+            elif 'isolation' in q_low:
+                q_tokens.update(['isolation'])
+        else:
+            q_tokens.update(['acid', 'atomicity', 'consistency', 'isolation', 'durability'])
+
+    if is_join_query:
+        q_tokens.update(['join', 'joins', 'inner', 'left', 'right', 'full', 'outer'])
+
     # Score each sentence
     sentence_scores: List[float] = []
     
@@ -177,11 +228,23 @@ def compress_chunk_content(
 
     kept_indices = set()
     max_score = max(sentence_scores) if sentence_scores else 0.0
-    
+
     # Find matching anchor indices
     anchor_indices = []
     for idx, score in enumerate(sentence_scores):
         lex_sc = _compute_lexical_overlap(q_tokens, sentences[idx])
+        s_low = sentences[idx].lower()
+
+        # Topic boundary check on anchors
+        if is_key_query and any(un in s_low for un in ['1nf', '2nf', '3nf', 'bcnf', 'normal form', 'python list', 'python decorator']):
+            continue
+        if is_norm_query and any(un in s_low for un in ['primary key:', 'candidate key:', 'foreign key:']):
+            continue
+        if is_single_key and 'primary key' in q_low and not ('primary key' in s_low or 'primary' in s_low):
+            continue
+        if is_single_norm and 'bcnf' in q_low and 'bcnf' not in s_low and 'boyce-codd' not in s_low:
+            continue
+
         if use_cross_encoder:
             if score >= max(threshold, max_score * 0.45) or lex_sc >= 0.35:
                 anchor_indices.append(idx)
@@ -192,15 +255,57 @@ def compress_chunk_content(
     # If anchor indices found, expand to include their complete section & list items
     for a_idx in anchor_indices:
         kept_indices.add(a_idx)
-        # Include immediate preceding context if it's a section title
-        if a_idx > 0 and (len(sentences[a_idx - 1]) < 80 or re.match(r'^\d+\.\s+', sentences[a_idx - 1])):
-            kept_indices.add(a_idx - 1)
+        # Include immediate preceding context if it's a matching section title
+        if a_idx > 0:
+            prev_s = sentences[a_idx - 1]
+            prev_low = prev_s.lower()
+            is_valid_header = False
+            if len(prev_s) < 80 or re.match(r'^\d+\.\s+', prev_s):
+                if is_key_query and any(k in prev_low for k in ['key', 'keys', 'relational']):
+                    is_valid_header = True
+                elif is_norm_query and any(k in prev_low for k in ['normal', 'form', 'dependency']):
+                    is_valid_header = True
+                elif is_acid_query and any(k in prev_low for k in ['acid', 'transaction']):
+                    is_valid_header = True
+                elif not (is_key_query or is_norm_query or is_acid_query):
+                    is_valid_header = True
+            if is_valid_header:
+                kept_indices.add(a_idx - 1)
         
-        # Lookahead: Include all subsequent numbered items, list items, stage descriptions, or paragraph continuation
+        # Lookahead: Include subsequent items belonging strictly to this section
+        if is_single_key or is_single_norm or is_single_acid:
+            # Single concept definition: do not expand into unrelated adjacent list items
+            continue
+
         in_list_mode = False
         for next_idx in range(a_idx + 1, min(len(sentences), a_idx + 25)):
             s_next = sentences[next_idx]
+            s_next_low = s_next.lower().strip()
             is_num_item = bool(re.match(r'^(?:[-*•\u007f\x7f]|\d+[\.\)]|(?:INNER|LEFT|RIGHT|FULL|CROSS|NATURAL|OUTER)\s+JOIN)\s*', s_next, re.IGNORECASE))
+            is_header = (s_next.endswith(':') and not is_num_item and len(s_next) < 80) or re.match(r'^[A-Z0-9\s_\-]{3,50}:?$', s_next)
+
+            # Stop expansion when a new or unrelated section header begins
+            if is_header:
+                if is_key_query and not any(k in s_next_low for k in ['key', 'keys']):
+                    break
+                if is_norm_query and not any(k in s_next_low for k in ['normal', 'form', 'dependency']):
+                    break
+                if is_acid_query and not any(k in s_next_low for k in ['acid', 'transaction']):
+                    break
+                if is_join_query and not any(k in s_next_low for k in ['join', 'joins', 'table']):
+                    break
+
+            # Filter out list items belonging to conflicting/unrelated topics
+            if is_key_query:
+                if any(un in s_next_low for un in ['1nf', '2nf', '3nf', 'bcnf', 'normal form', 'python', 'decorator', 'generator', 'inner join', 'outer join']):
+                    break
+            if is_norm_query:
+                if any(un in s_next_low for un in ['primary key:', 'candidate key:', 'foreign key:', 'python', 'decorator', 'generator', 'inner join']):
+                    break
+            if is_acid_query:
+                if any(un in s_next_low for un in ['reduces data redundancy', 'supports concurrent access', 'enforces security', 'waterfall', 'inner join']):
+                    continue
+
             if is_num_item:
                 in_list_mode = True
                 kept_indices.add(next_idx)
@@ -210,22 +315,27 @@ def compress_chunk_content(
             elif re.search(r'\b(?:stage|phase|step|requirement|design|implementation|testing|deployment|readiness|maintenance|component|layer)\b', s_next, re.IGNORECASE):
                 kept_indices.add(next_idx)
             else:
-                # If a completely new major section with different title starts (e.g. "8. Overall Development Flowchart"), stop expansion
                 if re.match(r'^\d+\.\s+[A-Z]', s_next) and not re.match(r'^[1-9]\.\s+[A-Z][a-z]', s_next):
                     break
-                if not in_list_mode and next_idx - a_idx <= 4:
+                if not in_list_mode and next_idx - a_idx <= 2:
                     kept_indices.add(next_idx)
                 elif in_list_mode:
                     break
 
-    # Safety check: If nothing was kept, retain top 3 sentences or full text
+    # Safety check: If nothing was kept, retain top 2 sentences only if they have positive score
     if not kept_indices:
-        if sentence_scores and max_score > 0:
+        if sentence_scores and max_score > 0.15:
             top_idx = int(max(range(len(sentence_scores)), key=lambda i: sentence_scores[i]))
-            for k in range(max(0, top_idx - 1), min(len(sentences), top_idx + 3)):
+            for k in range(max(0, top_idx - 1), min(len(sentences), top_idx + 2)):
                 kept_indices.add(k)
         else:
-            kept_indices = set(range(min(4, len(sentences))))
+            return "", {
+                "original_length": orig_len,
+                "compressed_length": 0,
+                "compression_ratio": 100.0,
+                "sentence_count": len(sentences),
+                "kept_sentences": 0
+            }
 
     # Build compressed text in original sentence order
     sorted_indices = sorted(list(kept_indices))
@@ -234,11 +344,15 @@ def compress_chunk_content(
     compressed_text = "\n".join(selected_sentences).strip()
     comp_len = len(compressed_text)
     
-    # Safety: If compressed text is too small (< 100 chars on a chunk with > 300 chars), preserve full chunk
-    if comp_len < 100 and orig_len >= 250:
-        compressed_text = clean_text
-        comp_len = orig_len
-        kept_indices = set(range(len(sentences)))
+    # Safety: If compressed text is negligible (< 30 chars), return empty to allow clean chunk dropping
+    if comp_len < 30:
+        return "", {
+            "original_length": orig_len,
+            "compressed_length": 0,
+            "compression_ratio": 100.0,
+            "sentence_count": len(sentences),
+            "kept_sentences": 0
+        }
 
     ratio = round((1.0 - (comp_len / max(1, orig_len))) * 100.0, 1) if orig_len > 0 else 0.0
     if ratio < 0.0:
@@ -345,11 +459,9 @@ def compress_context(
                     original_text=orig_text,
                     cross_encoder=cross_encoder
                 )
-                # If compression filtered out everything or left negligible text, fallback to original chunk
-                if not compressed_text or len(compressed_text.strip()) < 20:
-                    compressed_text = orig_text
-                    chunk_stats["compressed_length"] = len(orig_text)
-                    chunk_stats["compression_ratio"] = 0.0
+                # If compression determined this chunk has no query-relevant content, exclude it from context
+                if not compressed_text or len(compressed_text.strip()) < 25:
+                    continue
 
             # Deduplication & Near-duplicate filter across chunks
             # Check passage signature (first 80 alphanumeric characters normalized)

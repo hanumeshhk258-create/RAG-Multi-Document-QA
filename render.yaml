@@ -1,0 +1,39 @@
+# =============================================================================
+# Render Blueprint Configuration for Public Deployment
+# Intelligent Document Question Answering System Using RAG
+# =============================================================================
+
+services:
+  - type: web
+    name: intelligent-document-rag
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: GEMINI_API_KEY
+        sync: false  # Must be configured in Render Dashboard under Environment
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: RAG_DATA_DIR
+        value: ""    # Optional: Set to /var/data if mounting a Persistent Disk
+      - key: DEBUG_RAG
+        value: "false"
+      - key: LLM_TIMEOUT
+        value: "20"
+      - key: MAX_OUTPUT_TOKENS
+        value: "512"
+
+# Note for Persistent Disk (Render Starter / Standard Plans):
+# To retain uploaded PDFs and vector indexes across restarts on paid plans:
+# Add the following under the service definition:
+#   disk:
+#     name: rag-data
+#     mountPath: /var/data
+#     sizeGB: 1
+# And set envVar RAG_DATA_DIR to "/var/data".

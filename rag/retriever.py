@@ -3,12 +3,19 @@ import re
 import math
 import time
 import logging
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional, Dict, Any, Set
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
+
+# Persistent thread pool for concurrent hybrid retrieval branches
+_SEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="search_worker")
 
 # Core technical keywords registry for high-precision entity extraction
 TECHNICAL_KEYWORDS = {
@@ -247,7 +254,13 @@ class CrossEncoderManager:
             return None
 
         try:
-            raw_scores = model.predict(uncached_pairs, batch_size=8, show_progress_bar=False)
+            try:
+                import torch
+                with torch.inference_mode():
+                    raw_scores = model.predict(uncached_pairs, batch_size=32, show_progress_bar=False)
+            except Exception:
+                raw_scores = model.predict(uncached_pairs, batch_size=32, show_progress_bar=False)
+
             for orig_idx, key, sc in zip(uncached_indices, uncached_keys, raw_scores):
                 float_sc = float(sc)
                 final_scores[orig_idx] = float_sc
@@ -550,13 +563,19 @@ def classify_query_intent_and_topic(query: str) -> Dict[str, Any]:
 
     # 11. DBMS Keys
     keys_triggers = [
-        'primary key', 'foreign key', 'candidate key', 'super key', 'unique key', 'composite key'
+        'primary key', 'foreign key', 'candidate key', 'super key', 'superkey', 'unique key',
+        'composite key', 'alternate key', 'types of key', 'types of keys', 'type of key',
+        'type of keys', 'database key', 'database keys', 'relational key', 'relational keys',
+        'keys in dbms', 'keys in relational', 'keys in database', 'key types'
     ]
-    if any(re.search(rf'\b{re.escape(tr)}\b', lower) for tr in keys_triggers):
+    if any(re.search(rf'\b{re.escape(tr)}\b', lower) for tr in keys_triggers) or (
+        re.search(r'\btypes?\s+of\s+keys?\b', lower) or
+        (re.search(r'\bkeys?\b', lower) and any(w in lower for w in ['database', 'dbms', 'relational', 'table', 'rdbms', 'sql']))
+    ):
         return {
             "topic": "DBMS / Keys & Constraints",
             "category": "DBMS_KEYS",
-            "keywords": ['primary key', 'foreign key', 'candidate key', 'unique key'],
+            "keywords": ['primary key', 'foreign key', 'candidate key', 'super key', 'unique key', 'database keys'],
             "is_comparison": False
         }
 
@@ -595,6 +614,21 @@ def check_chunk_topic_conflict(query_category: str, chunk_text: str) -> bool:
 
     txt_lower = chunk_text.lower()
 
+    if query_category == "DBMS_KEYS":
+        has_db_keys = any(w in txt_lower for w in [
+            'primary key', 'foreign key', 'candidate key', 'super key', 'superkey',
+            'unique key', 'alternate key', 'composite key', 'keys in relational database'
+        ])
+        has_only_unrelated = (
+            any(w in txt_lower for w in [
+                'waterfall', 'key escrow', 'threshold cryptography', 'master decryption',
+                'python programming', 'python lists', 'key data structures in python',
+                'decorators', 'generators'
+            ])
+            and not has_db_keys
+        )
+        return has_only_unrelated
+
     if query_category == "SQL_COMMANDS":
         has_sql_cmd = any(w in txt_lower for w in ['select', 'insert', 'update', 'delete', 'dml', 'ddl', 'create', 'alter', 'drop', 'truncate', 'querying', 'query', 'sql commands'])
         has_only_unrelated = (
@@ -622,7 +656,7 @@ def check_chunk_topic_conflict(query_category: str, chunk_text: str) -> bool:
     if query_category == "DBMS_NORMALIZATION":
         has_norm = any(w in txt_lower for w in ['normalization', 'normal form', '1nf', '2nf', '3nf', 'bcnf', 'redundancy', 'functional dependency'])
         has_only_unrelated = (
-            any(w in txt_lower for w in ['waterfall', 'key escrow', 'python lists', 'inner join'])
+            any(w in txt_lower for w in ['waterfall', 'key escrow', 'python lists', 'key data structures in python', 'inner join'])
             and not has_norm
         )
         return has_only_unrelated
@@ -855,14 +889,38 @@ DISALLOWED_TOPICS = {
     'what about it', 'what about the last', 'what about the last property', 'what about the third',
     'what about the second', 'what about the first',
     'more', 'details', 'simple words', 'previous', 'above', 'type', 'types', 'property', 'properties',
-    'it simply', 'it in simple words'
+    'it simply', 'it in simple words', 'property of that', 'last property of that', 'second property of that',
+    'first property of that', 'third property of that', 'fourth property of that', 'property of this',
+    'property of it', 'last property of this', 'last property of it'
 }
+
+
+def is_disallowed_topic(cand: str) -> bool:
+    """Checks if candidate string is a generic pointer, ordinal, pronoun, or non-topic."""
+    if not cand:
+        return True
+    c = cand.strip().lower()
+    if c in DISALLOWED_TOPICS:
+        return True
+    if re.search(r'\b(it|this|that|these|those|them|they|their|its)\b', c):
+        return True
+    if re.search(r'\b(first|second|third|fourth|fifth|sixth|last|final|previous|next|another)\b', c):
+        return True
+    generic = {
+        'property', 'properties', 'type', 'types', 'point', 'points', 'concept', 'concepts',
+        'one', 'ones', 'item', 'items', 'command', 'commands', 'thing', 'things', 'detail',
+        'details', 'example', 'examples', 'explanation', 'definition', 'overview'
+    }
+    words = set(re.findall(r'[a-zA-Z0-9_\-]+', c))
+    if not words or words.issubset(generic):
+        return True
+    return False
 
 
 def extract_topic_from_text(text: str) -> str:
     """
     Extracts the core technical subject / topic entity from a message or query.
-    Ignores generic follow-up phrases and ordinals.
+    Ignores generic follow-up phrases, pronouns, and ordinals.
     """
     if not text:
         return ""
@@ -889,23 +947,15 @@ def extract_topic_from_text(text: str) -> str:
             extracted = m.group(group_idx).strip()
             extracted = re.sub(r'[?!.,;:]+$', '', extracted).strip()
             clean_extracted = re.sub(r'^(the|a|an|this|that|these|those)\s+', '', extracted, flags=re.IGNORECASE).strip().lower()
-            if clean_extracted not in DISALLOWED_TOPICS and extracted.lower() not in DISALLOWED_TOPICS and len(clean_extracted.split()) <= 4:
+            if not is_disallowed_topic(clean_extracted) and not is_disallowed_topic(extracted) and len(clean_extracted.split()) <= 4:
                 return clean_extracted
 
-    # 3. Fallback to normalized query if short and not composed purely of generic action words
-    GENERIC_WORDS = {
-        'give', 'show', 'example', 'examples', 'it', 'this', 'that', 'them', 'these', 'those',
-        'me', 'an', 'a', 'the', 'of', 'in', 'for', 'to', 'please', 'tell', 'explain', 'describe',
-        'what', 'is', 'are', 'about', 'last', 'first', 'second', 'third', 'fourth', 'property',
-        'type', 'types', 'properties', 'point', 'points', 'one', 'more', 'details', 'detail', 'simply'
-    }
+    # 3. Fallback to normalized query if short and not composed purely of generic action words or pronouns
     norm = normalize_query(clean)
     if norm:
         clean_norm = re.sub(r'^(the|a|an|this|that|these|those)\s+', '', norm, flags=re.IGNORECASE).strip().lower()
-        words_in_norm = set(clean_norm.split())
-        if clean_norm not in DISALLOWED_TOPICS and norm.lower() not in DISALLOWED_TOPICS and len(clean_norm.split()) <= 3:
-            if not words_in_norm.issubset(GENERIC_WORDS):
-                return clean_norm
+        if not is_disallowed_topic(clean_norm) and not is_disallowed_topic(norm) and len(clean_norm.split()) <= 3:
+            return clean_norm
 
     return ""
 
@@ -1028,6 +1078,91 @@ def extract_nth_item_from_assistant(text: str, n: int = 1) -> str:
     return ""
 
 
+def resolve_ordinal_from_conversation(
+    current_question: str,
+    conversation_history: Optional[List[Dict[str, Any]]] = None
+) -> Tuple[Optional[int], Optional[str], Optional[str]]:
+    """
+    Detects ordinal requests ('first property', 'second property', 'third property',
+    'fourth property', 'last property', '2nd', etc.) and resolves them against
+    the active conversation history to identify:
+    (ordinal_index, resolved_item_name, root_topic)
+    
+    Returns (None, None, None) if not an ordinal reference or if unresolvable.
+    """
+    if not current_question or not conversation_history:
+        return None, None, None
+
+    clean = current_question.strip()
+    lower = clean.lower()
+
+    # 1. Detect ordinal index
+    ord_n = None
+    if re.search(r'\b(first|1st|initial)\s*(property|type|point|one|command|concept|item|module|feature|component)?\b', lower):
+        ord_n = 1
+    elif re.search(r'\b(second|2nd)\s*(property|type|point|one|command|concept|item|module|feature|component)?\b', lower):
+        ord_n = 2
+    elif re.search(r'\b(third|3rd)\s*(property|type|point|one|command|concept|item|module|feature|component)?\b', lower):
+        ord_n = 3
+    elif re.search(r'\b(fourth|4th)\s*(property|type|point|one|command|concept|item|module|feature|component)?\b', lower):
+        ord_n = 4
+    elif re.search(r'\b(fifth|5th)\s*(property|type|point|one|command|concept|item|module|feature|component)?\b', lower):
+        ord_n = 5
+    elif re.search(r'\b(last|final)\s*(property|type|point|one|command|concept|item|module|feature|component)?\b', lower):
+        ord_n = -1
+
+    if ord_n is None:
+        return None, None, None
+
+    # 2. Search through assistant messages in conversation history for the list
+    resolved_item = None
+    found_assistant_msg = ""
+    for msg in reversed(conversation_history):
+        role = msg.get("role", "")
+        content = (msg.get("content") or "").strip()
+        if role in ("assistant", "ai") and content:
+            item = extract_nth_item_from_assistant(content, ord_n)
+            if item:
+                resolved_item = item
+                found_assistant_msg = content
+                break
+
+    if not resolved_item:
+        return ord_n, None, None
+
+    # 3. Determine the root topic for this item
+    root_topic = ""
+    item_lower = resolved_item.lower()
+    msg_lower = found_assistant_msg.lower()
+    if item_lower in {"atomicity", "consistency", "isolation", "durability"} or "acid" in msg_lower:
+        root_topic = "ACID properties"
+    elif item_lower in {"select", "insert", "update", "delete"} or "dml" in msg_lower:
+        root_topic = "DML commands"
+    elif item_lower in {"create", "alter", "drop", "truncate"} or "ddl" in msg_lower:
+        root_topic = "DDL commands"
+    elif "join" in item_lower or "join" in msg_lower:
+        root_topic = "SQL joins"
+    elif item_lower in {"1nf", "2nf", "3nf", "bcnf"} or "normal form" in msg_lower or "normalization" in msg_lower:
+        root_topic = "Normalization"
+    else:
+        # Search backwards for the root user question topic
+        for msg in reversed(conversation_history):
+            if msg.get("role") in ("user", "human"):
+                u_text = msg.get("content", "")
+                t = extract_topic_from_text(u_text)
+                if t and not is_disallowed_topic(t):
+                    root_topic = t
+                    break
+        if not root_topic:
+            m_hdr = re.search(r'\*\*(.+?)\*\*', found_assistant_msg)
+            if m_hdr:
+                cand_hdr = m_hdr.group(1).strip()
+                if not is_disallowed_topic(cand_hdr) and len(cand_hdr.split()) <= 4:
+                    root_topic = cand_hdr
+
+    return ord_n, resolved_item, root_topic or "database concepts"
+
+
 # =============================================================================
 # 2. CONVERSATION CONTEXT & QUERY REWRITING
 # =============================================================================
@@ -1052,6 +1187,15 @@ def detect_followup_question(
     if not conversation_history and not last_context:
         return False, "STANDALONE", "", []
 
+    # Check for ordinal follow-up reference FIRST
+    ord_n, ord_item, ord_topic = resolve_ordinal_from_conversation(clean, conversation_history)
+    if ord_n is not None:
+        if ord_item and ord_topic:
+            ord_topic_label = ord_topic.upper() if len(ord_topic) <= 4 else ord_topic.title()
+            return True, "FOLLOWUP", f"{ord_item} ({ord_topic_label})", []
+        else:
+            return True, "UNRESOLVED_ORDINAL", "", []
+
     # 1. Extract previous conversation context topics & comparison concepts
     prior_topic = ""
     comparison_concepts = []
@@ -1064,7 +1208,7 @@ def detect_followup_question(
         # Check if the most recent turn had comparison topics or answer
         for msg in reversed(recent_history):
             role = msg.get("role", "")
-            content = msg.get("content", "").strip()
+            content = (msg.get("content") or "").strip()
             
             # Extract comparison topics from previous turn if present
             if msg.get("comparison_topics"):
@@ -1080,12 +1224,12 @@ def detect_followup_question(
                 if m_term:
                     cand_sub = m_term.group(1).strip()
                     cand_sub = re.sub(r'[\*\(\)]+', '', cand_sub).strip()
-                    if cand_sub.lower() not in DISALLOWED_TOPICS and len(cand_sub.split()) <= 4:
+                    if not is_disallowed_topic(cand_sub) and len(cand_sub.split()) <= 4:
                         last_subtopic = cand_sub
 
             if role in ("user", "human") and content and not prior_topic:
                 top = extract_topic_from_text(content)
-                if top and top.lower() not in DISALLOWED_TOPICS:
+                if top and not is_disallowed_topic(top):
                     prior_topic = top
 
     # Also inspect last_context if prior_topic not found
@@ -1093,7 +1237,7 @@ def detect_followup_question(
         for ctx in last_context:
             text = ctx.get("text", "") if isinstance(ctx, dict) else (getattr(ctx, "page_content", "") or str(ctx))
             top = extract_topic_from_text(text[:200])
-            if top and top.lower() not in DISALLOWED_TOPICS:
+            if top and not is_disallowed_topic(top):
                 prior_topic = top
                 break
 
@@ -1101,9 +1245,9 @@ def detect_followup_question(
     effective_topic = ""
     if comparison_concepts and len(comparison_concepts) >= 2:
         effective_topic = " and ".join(comparison_concepts)
-    elif last_subtopic and last_subtopic.lower() != prior_topic.lower():
+    elif last_subtopic and prior_topic and last_subtopic.lower() != prior_topic.lower():
         effective_topic = f"{last_subtopic} ({prior_topic})" if prior_topic else last_subtopic
-    elif prior_topic:
+    elif prior_topic and not is_disallowed_topic(prior_topic):
         effective_topic = prior_topic
 
     # 2. Check for Follow-Up Patterns
@@ -1141,6 +1285,12 @@ def detect_followup_question(
         target = what_about_match.group(1).strip()
         if target.lower() in {'it', 'this', 'that', 'them', 'these', 'those', 'its advantages', 'the last', 'the first', 'the second', 'the third'}:
             return True, "FOLLOWUP", effective_topic or "Previous Concept", comparison_concepts
+        elif target.lower() in {'atomicity', 'consistency', 'isolation', 'durability'} and (
+            'acid' in effective_topic.lower() or 'acid' in prior_topic.lower() or
+            (last_assistant_answer and 'acid' in last_assistant_answer.lower()) or
+            (conversation_history and any('acid' in msg.get('content', '').lower() for msg in conversation_history[-6:]))
+        ):
+            return True, "FOLLOWUP", f"{target.title()} (ACID)", comparison_concepts
         else:
             # Topic switch to a specific named entity (e.g. "What about DDL?")
             return False, "STANDALONE", "", []
@@ -1158,6 +1308,19 @@ def detect_followup_question(
             concept_candidate = m.group(m.lastindex).strip().lower()
             if concept_candidate not in DISALLOWED_TOPICS and not has_pronoun:
                 return False, "STANDALONE", "", []
+
+    # Ellipsis / short sub-property follow-up (e.g. "durability?", "durability", "and durability?", "the durability property?")
+    acid_ellipsis_match = re.match(r'^(?:and\s+|the\s+)?(atomicity|consistency|isolation|durability)(?:\s+property)?[\?!.,;]?$', clean, re.IGNORECASE)
+    if acid_ellipsis_match:
+        sub = acid_ellipsis_match.group(1).strip()
+        is_acid_ctx = (
+            ('acid' in prior_topic.lower()) or
+            ('acid' in effective_topic.lower()) or
+            (last_assistant_answer and 'acid' in last_assistant_answer.lower()) or
+            (conversation_history and any('acid' in msg.get('content', '').lower() for msg in conversation_history[-6:]))
+        )
+        if is_acid_ctx:
+            return True, "FOLLOWUP", f"{sub.title()} (ACID)", comparison_concepts
 
     # Explicit subtopic follow-up request (e.g. "Explain atomicity.") ONLY when prior was ACID
     explain_sub_match = re.match(r'^(?:explain|describe|what is|tell me about)\s+([a-zA-Z0-9_\s\-]+)[\?!.,;]?$', clean, re.IGNORECASE)
@@ -1264,6 +1427,26 @@ def rewrite_query(
         # Crucial Isolation Fix: Standalone queries NEVER inherit prior topics
         return clean_curr, ""
 
+    # Step A2: Check for Ordinal Resolution Across Conversation History FIRST
+    ord_n, ord_item, ord_topic = resolve_ordinal_from_conversation(clean_curr, conversation_history)
+    if ord_n is not None:
+        if ord_item and ord_topic:
+            is_example = bool(re.search(r'\b(example|syntax|code)\b', curr_lower))
+            ord_topic_label = ord_topic.upper() if len(ord_topic) <= 4 else ord_topic.title()
+            context_label = f"{ord_item} ({ord_topic_label})"
+            if is_example:
+                rewritten_q = f"Give an example of {ord_item} in {ord_topic} and database transactions."
+            elif "explain" in curr_lower or "describe" in curr_lower or "tell me about" in curr_lower:
+                rewritten_q = f"What is {ord_item} in the {ord_topic} of database transactions?"
+            elif "what is" in curr_lower or "what are" in curr_lower:
+                rewritten_q = f"What is {ord_item} in the {ord_topic} of database transactions?"
+            else:
+                rewritten_q = f"What is {ord_item} in the {ord_topic} of database transactions?"
+            return rewritten_q, context_label
+        else:
+            # Ordinal was requested but could not be resolved from conversation history
+            return clean_curr, ""
+
     # Step B: Extract prior topic and comparison concepts from conversation history
     prior_topic = ""
     last_assistant_answer = ""
@@ -1274,26 +1457,26 @@ def rewrite_query(
         
         for msg in reversed(recent_history):
             role = msg.get("role", "")
-            content = msg.get("content", "").strip()
+            content = (msg.get("content") or "").strip()
             if role in ("assistant", "ai") and not last_assistant_answer and content:
                 last_assistant_answer = content
                 m_term = re.search(r'Term:\s*([^\n\r]+)', content)
                 if m_term:
                     cand_sub = m_term.group(1).strip()
                     cand_sub = re.sub(r'[\*\(\)]+', '', cand_sub).strip()
-                    if cand_sub.lower() not in DISALLOWED_TOPICS and len(cand_sub.split()) <= 4:
+                    if not is_disallowed_topic(cand_sub) and len(cand_sub.split()) <= 4:
                         last_subtopic = cand_sub
 
             if role in ("user", "human") and content and content.lower() != curr_lower and not prior_topic:
                 topic = extract_topic_from_text(content)
-                if topic and topic.lower() not in DISALLOWED_TOPICS:
+                if topic and not is_disallowed_topic(topic):
                     prior_topic = topic
 
     if not prior_topic and last_context:
         for ctx in last_context:
             text = ctx.get("text", "") if isinstance(ctx, dict) else (getattr(ctx, "page_content", "") or str(ctx))
             topic = extract_topic_from_text(text[:200])
-            if topic and topic.lower() not in DISALLOWED_TOPICS:
+            if topic and not is_disallowed_topic(topic):
                 prior_topic = topic
                 break
 
@@ -1318,15 +1501,40 @@ def rewrite_query(
     if what_about_match:
         target = what_about_match.group(1).strip()
         if target.lower() not in {'it', 'this', 'that', 'them', 'these', 'those', 'its advantages', 'the last', 'the first', 'the second', 'the third', 'its types'}:
+            if target.lower() in {'atomicity', 'consistency', 'isolation', 'durability'}:
+                is_acid_ctx = (
+                    ('acid' in (prior_topic or '').lower()) or
+                    ('acid' in (context_topic or '').lower()) or
+                    (last_assistant_answer and 'acid' in last_assistant_answer.lower()) or
+                    (conversation_history and any('acid' in msg.get('content', '').lower() for msg in conversation_history[-6:]))
+                )
+                if is_acid_ctx:
+                    return f"What is the {target.title()} property of ACID in database transactions?", f"{target.title()} (ACID)"
             return f"What is {target}?", target
 
-    # Step E: Sub-concept follow-up resolution (e.g. "Explain atomicity" -> "Explain Atomicity in ACID properties")
+    # Step E: Sub-concept follow-up resolution for ACID properties (e.g. "durability?", "what about durability?", etc.)
+    sub_acid_match = re.match(
+        r'^(?:explain|describe|what is|tell me about|what about|how about|and\s+what about|and\s+the|the|and)?\s*(atomicity|consistency|isolation|durability)(?:\s+property)?[\?!.,;]?$',
+        clean_curr,
+        re.IGNORECASE
+    )
+    is_acid_ctx = (
+        ('acid' in (prior_topic or '').lower()) or
+        ('acid' in (context_topic or '').lower()) or
+        (last_assistant_answer and 'acid' in last_assistant_answer.lower()) or
+        (conversation_history and any('acid' in msg.get('content', '').lower() for msg in conversation_history[-6:]))
+    )
+    if sub_acid_match and is_acid_ctx:
+        prop = sub_acid_match.group(1).strip().title()
+        return f"What is the {prop} property of ACID in database transactions?", f"{prop} (ACID)"
+
+    # Step E2: Other sub-concept follow-up requests (DML, DDL)
     explain_sub_match = re.match(r'^(?:explain|describe|what is|tell me about)\s+([a-zA-Z0-9_\s\-]+)[\?!.,;]?$', clean_curr, re.IGNORECASE)
     if explain_sub_match and prior_topic:
         sub = explain_sub_match.group(1).strip()
         sub_lower = sub.lower()
         if sub_lower in {'atomicity', 'consistency', 'isolation', 'durability'} and 'acid' in prior_topic.lower():
-            return f"Explain {sub.title()} in ACID properties and database transactions.", f"{sub.title()} (ACID)"
+            return f"What is the {sub.title()} property of ACID in database transactions?", f"{sub.title()} (ACID)"
         if sub_lower in {'select', 'insert', 'update', 'delete'} and 'dml' in prior_topic.lower():
             return f"Explain {sub.upper()} command in DML commands.", f"{sub.upper()} (DML)"
         if sub_lower in {'create', 'alter', 'drop', 'truncate'} and 'ddl' in prior_topic.lower():
@@ -1446,8 +1654,8 @@ def validate_retrieved_context(
         text = getattr(doc, "page_content", "") if hasattr(doc, "page_content") else (item.get("text", "") if isinstance(item, dict) else str(doc))
         text_lower = text.lower()
         chunk_stems = set(stem_token(w) for w in re.findall(r'[a-zA-Z0-9_\-]+', text_lower))
-
-        has_stem_match = bool(stems.intersection(chunk_stems)) if stems else True
+        match_count = len(stems.intersection(chunk_stems)) if stems else 1
+        has_stem_match = (match_count >= 2 or (len(keywords) <= 2 and match_count >= 1))
 
         if score >= min_score and (has_stem_match or score >= 0.85):
             valid_chunks.append(item)
@@ -1653,7 +1861,8 @@ def search_vector(
     selected_set = set(selected_documents) if selected_documents else None
     results = []
     
-    fetch_k = top_k * 3 if selected_set is not None else top_k
+    total_docs_in_store = len(vectorstore.docstore._dict) if hasattr(vectorstore, "docstore") and hasattr(vectorstore.docstore, "_dict") else 50
+    fetch_k = max(top_k * 4, min(total_docs_in_store, 100)) if selected_set is not None else top_k
     try:
         raw_faiss = vectorstore.similarity_search_with_score(query=query.strip(), k=fetch_k)
         for doc, distance in raw_faiss:
@@ -1903,25 +2112,24 @@ def hybrid_search(
     Performs Concurrent Hybrid Search combining FAISS vector search and BM25 keyword search:
     Executes FAISS vector search and BM25 search in parallel using ThreadPoolExecutor.
     """
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_vec = executor.submit(
-            search_vector,
-            vectorstore=vectorstore,
-            query=query,
-            top_k=vector_top_k,
-            selected_documents=selected_documents
-        )
-        future_bm25 = executor.submit(
-            search_bm25,
-            vectorstore=vectorstore,
-            query=query,
-            top_k=bm25_top_k,
-            selected_documents=selected_documents,
-            prior_topic=prior_topic
-        )
+    future_vec = _SEARCH_EXECUTOR.submit(
+        search_vector,
+        vectorstore=vectorstore,
+        query=query,
+        top_k=vector_top_k,
+        selected_documents=selected_documents
+    )
+    future_bm25 = _SEARCH_EXECUTOR.submit(
+        search_bm25,
+        vectorstore=vectorstore,
+        query=query,
+        top_k=bm25_top_k,
+        selected_documents=selected_documents,
+        prior_topic=prior_topic
+    )
 
-        vector_results = future_vec.result()
-        bm25_results, _ = future_bm25.result()
+    vector_results = future_vec.result()
+    bm25_results, _ = future_bm25.result()
 
     return fuse_search_results(
         semantic_results=vector_results,
@@ -2079,8 +2287,8 @@ def rerank_results(
         topic_info = classify_query_intent_and_topic(query)
         topic_category = topic_info.get("category", "GENERAL")
 
-    # Bounded candidate pool for fast neural reranking (up to 20 candidates)
-    RERANK_TOP_K_POOL = 20
+    # Bounded candidate pool for fast neural reranking (top 12 candidates)
+    RERANK_TOP_K_POOL = 12
     pool = candidate_chunks[:RERANK_TOP_K_POOL] if len(candidate_chunks) > RERANK_TOP_K_POOL else candidate_chunks
 
     search_terms = get_search_terms_and_synonyms(query, prior_topic)
@@ -2342,24 +2550,23 @@ def multi_query_hybrid_search(
             continue
 
         # 1 & 2. FAISS dense search + BM25 sparse search in parallel
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_faiss = executor.submit(
-                search_vector,
-                vectorstore=vectorstore,
-                query=q_clean,
-                top_k=vector_top_k,
-                selected_documents=selected_documents
-            )
-            future_bm25 = executor.submit(
-                search_bm25,
-                vectorstore=vectorstore,
-                query=q_clean,
-                top_k=bm25_top_k,
-                selected_documents=selected_documents,
-                prior_topic=prior_topic if idx == 1 else ""
-            )
-            faiss_res = future_faiss.result()
-            bm25_res, _ = future_bm25.result()
+        future_faiss = _SEARCH_EXECUTOR.submit(
+            search_vector,
+            vectorstore=vectorstore,
+            query=q_clean,
+            top_k=vector_top_k,
+            selected_documents=selected_documents
+        )
+        future_bm25 = _SEARCH_EXECUTOR.submit(
+            search_bm25,
+            vectorstore=vectorstore,
+            query=q_clean,
+            top_k=bm25_top_k,
+            selected_documents=selected_documents,
+            prior_topic=prior_topic if idx == 1 else ""
+        )
+        faiss_res = future_faiss.result()
+        bm25_res, _ = future_bm25.result()
 
         total_dense += len(faiss_res)
         total_sparse += len(bm25_res)
@@ -2728,7 +2935,181 @@ def build_grouped_sources_payload(sources: List[Dict[str, Any]], primary_doc: st
     grouped_sources_list = sorted(grouped_sources_map.values(), key=lambda x: x["document_score"], reverse=True)
     for g in grouped_sources_list:
         g["pages"] = sorted(list(set(g["pages"])))
-    return grouped_sources_list
+def filter_and_rank_sources(
+    sources: List[Dict[str, Any]],
+    answer: str = "",
+    eval_data: Optional[Dict[str, Any]] = None,
+    is_comparison: bool = False,
+    query: str = "",
+    min_doc_relevance: int = 50
+) -> Tuple[List[Dict[str, Any]], str, Dict[str, Any]]:
+    """
+    Ranks source candidates, identifies the PRIMARY SOURCE, and filters out unrelated PDFs:
+    - Calculates primary source using Cross-Encoder relevance, retrieval score, verified claim support, and citations.
+    - Selects the single strongest document as PRIMARY SOURCE.
+    - For normal questions: displays ONLY the primary source (plus an additional source only if it supports a verified claim, is cited, and meets strict relevance threshold).
+    - For multi-document comparisons: retains all documents that materially contribute evidence.
+    - Groups and deduplicates chunks by (document, page).
+    
+    Returns:
+        (filtered_sources, primary_source_label, document_relevance_scores)
+    """
+    if not sources:
+        return [], "None", {}
+
+    from rag.evaluator import FALLBACK_PHRASES
+    ans_clean = (answer or "").strip()
+    ans_lower = ans_clean.lower()
+
+    if not ans_clean or ans_clean == "Not enough supporting evidence was found in the selected documents." or any(ans_lower.startswith(fb) for fb in FALLBACK_PHRASES):
+        return [], "None", {}
+
+    # 1. Parse citations from final answer
+    cited_docs = set()
+    citation_patterns = [
+        r'\[([^\]]+?\.pdf)\s*[-—]\s*Page\s*(\d+)\]',
+        r'\[Document:\s*([^\]]+?\.pdf)\s*\|\s*Page:?\s*(\d+)\]',
+        r'\[([^\]]+?\.pdf),\s*(?:Page|pg\.?)\s*(\d+)\]',
+        r'\[([^\]]+?\.pdf)\]'
+    ]
+    for pat in citation_patterns:
+        matches = re.findall(pat, ans_clean, re.IGNORECASE)
+        for m in matches:
+            d_name = m[0] if isinstance(m, tuple) else m
+            cited_docs.add(d_name.strip())
+
+    # 2. Extract verified / supported claims from eval_data
+    claims_list = []
+    if eval_data and isinstance(eval_data, dict):
+        claims_list = eval_data.get("claims") or eval_data.get("answer_correction", {}).get("claims_correction") or []
+
+    doc_claim_counts: Dict[str, int] = {}
+    doc_claim_pages: Dict[str, Set[int]] = {}
+    doc_claim_max_score: Dict[str, float] = {}
+
+    for cl in claims_list:
+        if isinstance(cl, dict) and cl.get("status") in ("SUPPORTED", "PARTIALLY_SUPPORTED"):
+            d = cl.get("document") or cl.get("document_name") or ""
+            if d:
+                doc_claim_counts[d] = doc_claim_counts.get(d, 0) + 1
+                p = cl.get("page") or cl.get("page_number") or 1
+                doc_claim_pages.setdefault(d, set()).add(int(p))
+                doc_claim_max_score[d] = max(doc_claim_max_score.get(d, 0.0), float(cl.get("score", 0.85)))
+
+    # 3. Aggregate candidate document metrics from retrieved sources
+    doc_chunks_map: Dict[str, List[Dict[str, Any]]] = {}
+    for s in sources:
+        d = s.get("document") or s.get("filename") or "Document"
+        doc_chunks_map.setdefault(d, []).append(s)
+
+    doc_eval_scores: Dict[str, float] = {}
+    doc_rel_pct_map: Dict[str, int] = {}
+    doc_top_page_map: Dict[str, int] = {}
+    doc_top_chunk_score_map: Dict[str, float] = {}
+
+    for d, chunks in doc_chunks_map.items():
+        max_chunk_score = max(float(c.get("score", 0.0)) for c in chunks) if chunks else 0.0
+        max_rel_pct = max(int(c.get("relevance_pct", round(max_chunk_score * 100))) for c in chunks) if chunks else 0
+        sorted_chunks = sorted(chunks, key=lambda x: float(x.get("score", 0.0)), reverse=True)
+        top_page = sorted_chunks[0].get("page", 1) if sorted_chunks else 1
+
+        # Check citation and claim support
+        is_cited = 1.0 if (d in cited_docs or any(d.lower() in cd.lower() for cd in cited_docs)) else 0.0
+        claim_cnt = doc_claim_counts.get(d, 0)
+        claim_ratio = claim_cnt / max(1, len(claims_list)) if claims_list else (1.0 if is_cited else 0.0)
+        claim_max_s = doc_claim_max_score.get(d, max_chunk_score)
+
+        # Composite Evidence Strength Score
+        composite_score = (
+            (max_chunk_score * 0.35) +
+            (claim_max_s * 0.25) +
+            (min(1.0, claim_ratio) * 0.25) +
+            (is_cited * 0.15)
+        )
+
+        doc_eval_scores[d] = composite_score
+        doc_rel_pct_map[d] = max_rel_pct
+        doc_top_page_map[d] = top_page
+        doc_top_chunk_score_map[d] = max_chunk_score
+
+    # Rank documents by composite evidence score
+    sorted_docs = sorted(doc_eval_scores.keys(), key=lambda d: doc_eval_scores[d], reverse=True)
+    if not sorted_docs:
+        return [], "None", {}
+
+    primary_doc = sorted_docs[0]
+    primary_page = doc_top_page_map.get(primary_doc, 1)
+    primary_source_label = f"{primary_doc} — Page {primary_page}"
+    primary_top_score = doc_top_chunk_score_map.get(primary_doc, 1.0)
+
+    # 4. Filter Kept Documents
+    kept_docs = set()
+    kept_docs.add(primary_doc)
+
+    if is_comparison:
+        # Multi-document comparison: keep documents that contribute verified evidence or match topics
+        comp_topics_lower = [t.lower() for t in re.findall(r'\b[a-zA-Z0-9_]+\b', query.lower()) if len(t) > 2]
+        for d in sorted_docs:
+            if d == primary_doc:
+                continue
+            is_cited = (d in cited_docs or any(d.lower() in cd.lower() for cd in cited_docs))
+            has_claims = (doc_claim_counts.get(d, 0) > 0)
+            doc_name_clean = d.lower().replace("_", " ").replace(".pdf", "")
+            matches_topic = any(t in doc_name_clean for t in comp_topics_lower if t not in ("compare", "difference", "versus", "between", "what", "with"))
+            
+            # Keep if cited in answer, has supported claims, or matches comparison topic with high relevance
+            if is_cited or has_claims or (matches_topic and doc_rel_pct_map.get(d, 0) >= 60 and doc_top_chunk_score_map.get(d, 0) >= 0.50):
+                kept_docs.add(d)
+    else:
+        # Normal question: ONLY keep primary document unless an additional document is strictly required and verified
+        for d in sorted_docs:
+            if d == primary_doc:
+                continue
+            is_cited = (d in cited_docs or any(d.lower() in cd.lower() for cd in cited_docs))
+            has_claims = (doc_claim_counts.get(d, 0) > 0)
+            score_ratio = (doc_top_chunk_score_map.get(d, 0.0) / max(0.01, primary_top_score))
+            # Strict inclusion criteria for additional source
+            if is_cited and has_claims and doc_rel_pct_map.get(d, 0) >= 70 and score_ratio >= 0.85:
+                kept_docs.add(d)
+
+    # 5. Build filtered sources list and deduplicate by (document, page)
+    filtered_sources = []
+    seen_keys = set()
+
+    for d in sorted_docs:
+        if d not in kept_docs:
+            continue
+        chunks = doc_chunks_map.get(d, [])
+        chunks_sorted = sorted(chunks, key=lambda x: float(x.get("score", 0.0)), reverse=True)
+        max_pages_to_keep = 4 if is_comparison else 2
+        pages_kept = 0
+
+        for c in chunks_sorted:
+            p = c.get("page", 1)
+            key = (d, p, c.get("table_number"))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                item = dict(c)
+                item["is_primary"] = (d == primary_doc)
+                item["document_score"] = round(float(doc_top_chunk_score_map.get(d, c.get("score", 0.9))), 3)
+                item["document_relevance_pct"] = int(doc_rel_pct_map.get(d, c.get("relevance_pct", 90)))
+                filtered_sources.append(item)
+                pages_kept += 1
+                if pages_kept >= max_pages_to_keep:
+                    break
+
+    # Build document relevance scores dict
+    doc_relevance_scores = {}
+    for d in kept_docs:
+        doc_relevance_scores[d] = {
+            "document": d,
+            "document_score": round(float(doc_top_chunk_score_map.get(d, 0.9)), 3),
+            "relevance_pct": int(doc_rel_pct_map.get(d, 90)),
+            "is_primary": (d == primary_doc),
+            "top_page": doc_top_page_map.get(d, 1)
+        }
+
+    return filtered_sources, primary_source_label, doc_relevance_scores
 
 
 def retrieve_multi_document_context(
@@ -3000,24 +3381,23 @@ def retrieve_with_query_decomposition(
             continue
 
         # 1 & 2. Vector Search + BM25 Search in parallel for sub-query
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_v = executor.submit(
-                search_vector,
-                vectorstore=vectorstore,
-                query=clean_sq,
-                top_k=vector_top_k,
-                selected_documents=selected_documents
-            )
-            future_b = executor.submit(
-                search_bm25,
-                vectorstore=vectorstore,
-                query=clean_sq,
-                top_k=bm25_top_k,
-                selected_documents=selected_documents,
-                prior_topic=prior_topic
-            )
-            v_res = future_v.result()
-            b_res, _ = future_b.result()
+        future_v = _SEARCH_EXECUTOR.submit(
+            search_vector,
+            vectorstore=vectorstore,
+            query=clean_sq,
+            top_k=vector_top_k,
+            selected_documents=selected_documents
+        )
+        future_b = _SEARCH_EXECUTOR.submit(
+            search_bm25,
+            vectorstore=vectorstore,
+            query=clean_sq,
+            top_k=bm25_top_k,
+            selected_documents=selected_documents,
+            prior_topic=prior_topic
+        )
+        v_res = future_v.result()
+        b_res, _ = future_b.result()
 
         total_dense += len(v_res)
         total_sparse += len(b_res)
@@ -3950,13 +4330,24 @@ def adaptive_retrieval_pipeline(
             seen_sources.add(key)
             deduped_sources.append(src)
 
-    # Build grouped sources for UI
-    grouped_sources_list = build_grouped_sources_payload(deduped_sources, primary_doc=primary_doc_name)
-
     total_sec_final = round(time.perf_counter() - t_start, 2)
     final_eval_data = best_attempt["eval_data"]
     final_ans_text = final_eval_data.get("final_verified_answer") or best_attempt["answer"]
     draft_ans_text = final_eval_data.get("draft_answer") or best_attempt["answer"]
+
+    # Apply strict claim-level and relevance source filtering
+    filtered_sources, primary_source_label, doc_relevance_scores = filter_and_rank_sources(
+        sources=deduped_sources,
+        answer=final_ans_text,
+        eval_data=final_eval_data,
+        is_comparison=False,
+        query=query
+    )
+
+    primary_doc_name = primary_source_label.split(" — ")[0] if primary_source_label and primary_source_label != "None" else (filtered_sources[0]["document"] if filtered_sources else "None")
+
+    # Build grouped sources for UI
+    grouped_sources_list = build_grouped_sources_payload(filtered_sources, primary_doc=primary_doc_name)
 
     timing_breakdown_final = {
         "retrieval_ms": t_retrieval_ms,
@@ -3983,7 +4374,7 @@ def adaptive_retrieval_pipeline(
         "process_steps": process_steps
     }
 
-    documents_used = list(set(src["document"] for src in deduped_sources))
+    documents_used = list(set(src["document"] for src in filtered_sources))
 
     structured_data_payload = {
         "tables_detected": len(retrieved_tables),
@@ -3997,9 +4388,10 @@ def adaptive_retrieval_pipeline(
         "final_verified_answer": final_ans_text,
         "answer_correction": final_eval_data.get("answer_correction", {}),
         "retrieved_items": final_items,
-        "sources": deduped_sources,
+        "sources": filtered_sources,
         "grouped_sources": grouped_sources_list,
-        "primary_source": retrieval_stats.get("primary_source", f"{primary_doc_name} — Page {deduped_sources[0]['page']}" if deduped_sources else "None"),
+        "primary_source": primary_source_label,
+        "document_relevance_scores": doc_relevance_scores,
         "retrieved_context": retrieved_context_data,
         "documents_used": documents_used,
         "chunks_used": len(final_items),

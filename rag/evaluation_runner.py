@@ -103,23 +103,15 @@ def run_benchmark_evaluation(
 
         t_q_start = time.perf_counter()
 
-        # 1. Retrieval (Hybrid FAISS + BM25 + Cross-Encoder)
+        # 1. Retrieval (Hybrid FAISS + BM25 + Cross-Encoder via production retrieve_relevant_chunks)
         t_ret_start = time.perf_counter()
-        unique_candidates, mq_stats = multi_query_hybrid_search(
+        from rag.retriever import retrieve_relevant_chunks
+        retrieved, q_type_det, term_det, rew_q, ret_stats = retrieve_relevant_chunks(
             vectorstore=vectorstore,
-            queries=[question],
-            selected_documents=None,
-            vector_top_k=10,
-            bm25_top_k=10,
-            vector_weight=VECTOR_WEIGHT,
-            bm25_weight=BM25_WEIGHT
-        )
-        final_top = rerank_chunks(
             query=question,
-            candidate_chunks=unique_candidates,
-            top_k=top_k
+            top_k=top_k,
+            chat_history=case.get("conversation_history")
         )
-        retrieved = [(item["doc"], item.get("final_score", 0.5), item.get("relevance_pct", 50)) for item in final_top]
         method = "Multi-Query Hybrid (FAISS + BM25 + Cross-Encoder)"
         t_ret_ms = round((time.perf_counter() - t_ret_start) * 1000.0, 2)
         retrieval_latencies_ms.append(t_ret_ms)

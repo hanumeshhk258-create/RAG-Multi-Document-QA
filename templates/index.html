@@ -70,7 +70,7 @@
                     </li>
                     <li>
                         <a href="#sessions" class="nav-item" data-view="sessions" id="nav-item-sessions">
-                            <span class="nav-icon">💬</span>
+                            <span class="nav-icon">🕘</span>
                             <span class="nav-label">Sessions</span>
                         </a>
                     </li>
@@ -108,7 +108,7 @@
                     </div>
                     <div class="sidebar-mini-meta">
                         <span id="sidebar-meta-docs">0 Docs</span> &bull;
-                        <span id="sidebar-meta-chunks">0 Chunks</span>
+                        <span id="sidebar-meta-chunks">0 Sections</span>
                     </div>
                     <div class="hidden-legacy-stats hidden">
                         <span id="stat-docs">0</span>
@@ -340,7 +340,7 @@
                         <!-- Document List Table Container -->
                         <div class="file-list-container">
                             <ul class="file-list" id="file-list">
-                                <li class="empty-list-item">No documents uploaded yet. Upload a PDF above to begin.</li>
+                                <li class="empty-list-item">No documents uploaded yet. Upload your PDF files to get started.</li>
                             </ul>
                         </div>
                     </div>
@@ -424,13 +424,16 @@
                             <div class="session-selector-group">
                                 <span class="session-label">Session:</span>
                                 <select id="chat-session-select" class="session-dropdown" title="Select conversation session">
-                                    <option value="default">Default Session</option>
-                                    <option value="dbms_prep">DBMS Preparation</option>
-                                    <option value="sgcube_research">SG CUBE Research</option>
-                                    <option value="sql_revision">SQL Revision</option>
+                                    <!-- Populated dynamically by JavaScript -->
                                 </select>
+                                <button type="button" id="btn-create-session-chat" class="btn btn-ghost btn-sm" title="Create New Session" style="padding: 4px 8px; margin-left: 2px;">
+                                    <span>➕</span>
+                                </button>
                             </div>
 
+                            <button id="btn-old-chat" class="btn btn-secondary btn-sm" title="Reopen a previous conversation">
+                                <span>⏪</span> Old Chat
+                            </button>
                             <button id="btn-new-chat" class="btn btn-secondary btn-sm" title="Start a fresh conversation session">
                                 <span>➕</span> New Chat
                             </button>
@@ -507,7 +510,7 @@
                     <!-- Top Action Bar -->
                     <div class="workspace-header-bar">
                         <div class="workspace-title-wrap">
-                            <h2>💬 Sessions</h2>
+                            <h2>🕘 Sessions</h2>
                             <p class="sessions-header-sub">Continue your conversations where you left off.</p>
                         </div>
                         <div class="workspace-action-buttons">
@@ -1447,6 +1450,29 @@
     <div id="theme-transition-overlay" class="theme-transition-overlay" aria-hidden="true"></div>
 
 
+    <!-- SESSION CREATE MODAL -->
+    <div id="session-create-modal" class="modal-overlay hidden">
+        <div class="modal-backdrop" id="session-create-backdrop"></div>
+        <div class="modal-dialog" style="max-width: 440px;">
+            <div class="modal-dialog-header">
+                <div class="modal-dialog-title-wrap">
+                    <span class="modal-dialog-icon">➕</span>
+                    <h3>Create New Session</h3>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-session-create">&times;</button>
+            </div>
+            <div class="modal-dialog-body">
+                <p class="modal-intro-text">Enter a custom name for your new conversation session:</p>
+                <input type="text" id="session-create-input" class="search-input-field" style="width: 100%; margin-top: 10px;" placeholder="e.g. SQL Revision, DBMS Preparation..." />
+                <p id="session-create-error" class="hidden text-danger" style="margin-top: 8px; font-size: 13px; color: #ef4444;"></p>
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-session-create">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-confirm-session-create">Create & Open</button>
+            </div>
+        </div>
+    </div>
+
     <!-- SESSION RENAME MODAL -->
     <div id="session-rename-modal" class="modal-overlay hidden">
         <div class="modal-backdrop" id="session-rename-backdrop"></div>
@@ -1491,7 +1517,34 @@
         </div>
     </div>
 
+    <!-- OLD CHAT MODAL -->
+    <div id="old-chat-modal" class="modal-overlay hidden">
+        <div class="modal-backdrop" id="old-chat-backdrop"></div>
+        <div class="modal-dialog" style="max-width: 560px; max-height: 85vh; display: flex; flex-direction: column;">
+            <div class="modal-dialog-header">
+                <div class="modal-dialog-title-wrap">
+                    <span class="modal-dialog-icon">🕘</span>
+                    <h3>Previous Conversations</h3>
+                </div>
+                <button type="button" class="btn-close-modal" id="btn-close-old-chat">&times;</button>
+            </div>
+            <div class="modal-dialog-body" style="overflow-y: auto; flex: 1; padding: 16px 20px;">
+                <p class="modal-intro-text" style="margin-bottom: 12px;">Select a previously saved conversation to restore its messages and continue asking questions:</p>
+                <div class="old-chat-search-wrap" style="margin-bottom: 14px;">
+                    <input type="text" id="old-chat-search-input" class="search-input-field" style="width: 100%;" placeholder="Search conversations by title or question..." autocomplete="off" />
+                </div>
+                <div id="old-chat-list" class="old-chat-list">
+                    <!-- Populated dynamically from userSessions -->
+                </div>
+            </div>
+            <div class="modal-dialog-footer" style="display: flex; justify-content: space-between; align-items: center;">
+                <span id="old-chat-count-label" style="font-size: 12px; color: var(--text-secondary, #94a3b8);">0 conversations</span>
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-old-chat">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Application JavaScript -->
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=old_chat_v1"></script>
 </body>
 </html>

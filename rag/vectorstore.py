@@ -11,7 +11,11 @@ logger = logging.getLogger(__name__)
 
 import hashlib
 
-DEFAULT_VECTORSTORE_DIR = "vectorstore"
+RAG_DATA_DIR = os.environ.get("RAG_DATA_DIR", "").strip()
+if RAG_DATA_DIR:
+    DEFAULT_VECTORSTORE_DIR = os.path.join(RAG_DATA_DIR, "vectorstore")
+else:
+    DEFAULT_VECTORSTORE_DIR = "vectorstore"
 METADATA_FILE = "metadata.json"
 
 
@@ -42,6 +46,7 @@ def _save_metadata(
 ) -> None:
     """Saves comprehensive indexing metadata and document lifecycle registry to JSON file."""
     try:
+        clear_vectorstore_metadata_cache()
         os.makedirs(folder_path, exist_ok=True)
         metadata_path = os.path.join(folder_path, METADATA_FILE)
         
@@ -86,15 +91,37 @@ def _save_metadata(
         logger.warning(f"Could not save vectorstore metadata: {str(err)}")
 
 
+_METADATA_CACHE: Dict[str, Any] = {}
+_METADATA_CACHE_KEY: Dict[str, Tuple[float, float, int]] = {}
+
+
+def clear_vectorstore_metadata_cache():
+    """Invalidates the in-memory metadata cache."""
+    _METADATA_CACHE.clear()
+    _METADATA_CACHE_KEY.clear()
+
+
 def load_vectorstore_metadata(folder_path: str = DEFAULT_VECTORSTORE_DIR, docs_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     Loads saved vectorstore metadata and synchronizes with physical files on disk.
+    Utilizes in-memory caching to eliminate redundant disk reads when metadata is unchanged.
     
     Returns:
         Dict with keys: indexed_documents, total_documents, total_indexed, total_pending,
         total_error, total_pages, total_chunks, documents_info, last_updated.
     """
     metadata_path = os.path.join(folder_path, METADATA_FILE)
+    
+    # Check cache freshness via mtimes
+    cache_id = f"{os.path.abspath(folder_path)}::{os.path.abspath(docs_dir) if docs_dir else ''}"
+    meta_mtime = os.path.getmtime(metadata_path) if os.path.exists(metadata_path) else 0.0
+    docs_mtime = os.path.getmtime(docs_dir) if docs_dir and os.path.exists(docs_dir) else 0.0
+    docs_count = len(os.listdir(docs_dir)) if docs_dir and os.path.exists(docs_dir) else 0
+    curr_key = (meta_mtime, docs_mtime, docs_count)
+
+    if cache_id in _METADATA_CACHE and _METADATA_CACHE_KEY.get(cache_id) == curr_key:
+        return dict(_METADATA_CACHE[cache_id])
+
     data = {
         "indexed_documents": [],
         "total_documents": 0,
@@ -136,32 +163,9 @@ def load_vectorstore_metadata(folder_path: str = DEFAULT_VECTORSTORE_DIR, docs_d
         if "indexed_at" not in d:
             d["indexed_at"] = data.get("last_updated") if d["status"] == "Ready" else None
 
-    # Sync with physical documents directory if provided
+    # Sync with physical documents directory: prune metadata for any documents deleted from disk
     if docs_dir and os.path.exists(docs_dir):
         disk_files = set(f for f in sorted(os.listdir(docs_dir)) if f.lower().endswith('.pdf'))
-        existing_filenames = set(d.get("filename") for d in doc_info_list)
-        
-        # Add new disk files as Pending
-        for df in sorted(disk_files):
-            if df not in existing_filenames:
-                fpath = os.path.join(docs_dir, df)
-                f_size = os.path.getsize(fpath) if os.path.exists(fpath) else 0
-                f_hash = compute_file_hash(fpath)
-                doc_info_list.append({
-                    "document_id": f"doc_{f_hash[:12]}",
-                    "filename": df,
-                    "file_hash": f_hash,
-                    "status": "Pending",
-                    "pages": 1,
-                    "chunks": 0,
-                    "file_size": f_size,
-                    "size_kb": round(f_size / 1024, 1),
-                    "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "indexed_at": None,
-                    "error_message": None
-                })
-        
-        # Remove metadata for deleted disk files
         doc_info_list = [d for d in doc_info_list if d.get("filename") in disk_files]
 
     # Recompute summary statistics
@@ -180,12 +184,17 @@ def load_vectorstore_metadata(folder_path: str = DEFAULT_VECTORSTORE_DIR, docs_d
         data["total_documents"] = data.get("total_documents") or len(indexed)
         data["total_indexed"] = data.get("total_indexed") or len(indexed)
 
+    # Store in memory cache
+    _METADATA_CACHE[cache_id] = dict(data)
+    _METADATA_CACHE_KEY[cache_id] = curr_key
+
     return data
 
 
 def _save_metadata_dict(folder_path: str, data: Dict[str, Any]) -> bool:
-    """Directly saves metadata dictionary to metadata.json."""
+    """Directly saves metadata dictionary to metadata.json and invalidates metadata cache."""
     try:
+        clear_vectorstore_metadata_cache()
         os.makedirs(folder_path, exist_ok=True)
         metadata_path = os.path.join(folder_path, METADATA_FILE)
         data["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -319,6 +328,7 @@ def clear_vectorstore(folder_path: str = DEFAULT_VECTORSTORE_DIR) -> bool:
         True if successfully cleared, False otherwise.
     """
     try:
+        clear_vectorstore_metadata_cache()
         if os.path.exists(folder_path):
             shutil.rmtree(folder_path)
             os.makedirs(folder_path, exist_ok=True)

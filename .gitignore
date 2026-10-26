@@ -1,20 +1,25 @@
 # Environment file (contains secrets)
 .env
+*.env
 
 # Virtual Environment
+.venv/
 venv/
 env/
 ENV/
 
-# Python Cache
+# Python Cache & Bytecode
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
 *.pyo
 *.pyd
 .pytest_cache/
+*.log
 
 # FAISS Vector Index Storage
-vectorstore/
+vectorstore/*
 !vectorstore/.gitkeep
 
 # Streamlit config/cache
@@ -30,6 +35,14 @@ analytics.db
 *.sqlite
 *.sqlite3
 test_vectorstore/
+scratch/
+*.tmp
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
 
 # OS specific files
 .DS_Store

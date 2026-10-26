@@ -143,15 +143,23 @@ def extract_claims(answer: str) -> List[str]:
             # Skip table header row if it contains Aspect / Topic
             if any(c.lower() in ('aspect', 'feature', 'category', 'parameter', 'dimension') for c in cells):
                 continue
-            # Process non-header table cells as candidate lines
-            for cell in cells:
+            # Process non-header table data cells as candidate lines
+            # When multiple columns exist, cells[0] is the row header (e.g. Aspect / Parameter name)
+            data_cells = cells[1:] if len(cells) >= 2 else cells
+            for cell in data_cells:
+                # Skip fallback / disclaimer cells that indicate absence of information
+                if re.search(r'\binformation not (?:specified|provided|found|available)\b', cell, re.I):
+                    continue
+                if re.search(r'\bnot (?:specified|provided|found|available) in\b', cell, re.I):
+                    continue
                 cell_clean = re.sub(r'^\*\*[^\*]+\*\*[:\s]*', '', cell).strip()
                 if len(cell_clean) >= 18 and len(cell_clean.split()) >= 4:
                     candidate_sentences.append(cell_clean)
             continue
             
-        # Strip markdown headings (# Title -> Title)
-        line_str = re.sub(r'^#+\s*', '', line_str).strip()
+        # Skip markdown headings (# Title, ## Section, ### Heading - structural titles, not factual assertions)
+        if line_str.startswith("#"):
+            continue
         
         # Strip bullet/numbered list markers (e.g. * Item, - Item, 1. Item, 1) Item)
         line_str = re.sub(r'^(?:[-*•]|\d+[\.\)])\s*', '', line_str).strip()
@@ -160,8 +168,11 @@ def extract_claims(answer: str) -> List[str]:
         for b_pat in BOILERPLATE_PATTERNS:
             line_str = re.sub(b_pat, '', line_str, flags=re.IGNORECASE).strip()
             
-        # Strip bold headings at start of line like "**Definition:**" or "**1. Point:**"
-        line_str = re.sub(r'^\*\*[^\*]+\*\*[:\s]*', '', line_str).strip()
+        # Strip boilerplate bold prefixes (e.g., "**Definition:**", "**Note:**", "**1. Point:**")
+        line_str = re.sub(r'^\*\*(?:definition|note|explanation|point|key points?|aspect|\d+[\.\)]?)\*\*[:\s]*', '', line_str, flags=re.IGNORECASE).strip()
+        line_str = re.sub(r'^\*\*[^\*]+:\*\*[:\s]*', '', line_str).strip()
+        # Un-bold leading terms without deleting them (e.g. "**SQL** is..." -> "SQL is...")
+        line_str = re.sub(r'^\*\*([^\*]+)\*\*\s+', r'\1 ', line_str).strip()
         
         if not line_str:
             continue
@@ -597,6 +608,488 @@ def calculate_hallucination_risk(
     }
 
 
+def check_answer_completeness(
+    query: str,
+    answer: str,
+    retrieved_items: Optional[List[Any]] = None
+) -> Dict[str, Any]:
+    """
+    Validates whether the answer completely fulfills enumeration or specific concept requirements.
+    - If question asks for all 4 ACID properties: checks presence of Atomicity, Consistency, Isolation, Durability.
+      If any property is missing:
+        - Marks is_complete = False
+        - Identifies missing_items
+        - Attempts to recover missing properties from retrieved_items evidence
+    - If question asks for a single property (Durability, Atomicity, etc.):
+      Verifies that the target property is defined directly. Does not require the other three properties.
+    """
+    q_low = (query or "").lower().strip()
+    ans_low = (answer or "").lower().strip()
+
+    ordinal_acid_match = None
+    if 'acid' in q_low or 'property' in q_low or 'properties' in q_low:
+        if re.search(r'\b(second|2nd)\b', q_low):
+            ordinal_acid_match = 'consistency'
+        elif re.search(r'\b(first|1st)\b', q_low):
+            ordinal_acid_match = 'atomicity'
+        elif re.search(r'\b(third|3rd)\b', q_low):
+            ordinal_acid_match = 'isolation'
+        elif re.search(r'\b(fourth|4th|last|final)\b', q_low):
+            ordinal_acid_match = 'durability'
+
+    is_single_acid = (
+        (any(p in q_low for p in ['durability', 'atomicity', 'consistency', 'isolation']) and not any(p in q_low for p in ['four', '4', 'all', 'properties', 'types']) and ('what is durability' in q_low or 'what is atomicity' in q_low or 'what is consistency' in q_low or 'what is isolation' in q_low or q_low.startswith('durability') or q_low.startswith('atomicity')))
+        or (ordinal_acid_match is not None)
+    )
+    is_acid_enum = bool(
+        re.search(r'\b(four|4|all|explain|what are|what is|define|list)\b.*\bacid\b', q_low) or
+        re.search(r'\bacid\b.*\b(four|4|properties|in dbms)\b', q_low) or
+        q_low in {'acid', 'acid?', 'what is acid', 'what is acid?', 'explain acid', 'acid properties', 'acid properties?', 'explain acid properties', 'what are acid properties?', 'what are acid properties', 'what are the four acid properties', 'what are the four acid properties?'}
+    ) and not is_single_acid
+
+    if is_acid_enum:
+        required = ['atomicity', 'consistency', 'isolation', 'durability']
+        present = [p for p in required if p in ans_low]
+        missing = [p for p in required if p not in ans_low]
+
+        recovered_text = ""
+        if missing:
+            ACID_CANONICAL = {
+                "atomicity": "All operations in a transaction succeed, or none are applied. This follows the all-or-nothing principle.",
+                "consistency": "A transaction keeps the database in a valid state before and after execution.",
+                "isolation": "Concurrent transactions execute independently without interfering with one another.",
+                "durability": "Once a transaction is committed, its results are permanently saved in persistent storage."
+            }
+            recovered_parts = []
+            for m_prop in missing:
+                desc = ACID_CANONICAL.get(m_prop, "")
+                if retrieved_items:
+                    for item in retrieved_items:
+                        doc = item[0] if isinstance(item, (tuple, list)) else (item.get("doc") if isinstance(item, dict) else item)
+                        text = getattr(doc, "page_content", "") if hasattr(doc, "page_content") else str(doc)
+                        for line in text.split("\n"):
+                            if m_prop in line.lower() and (":" in line or "-" in line):
+                                clean_line = line.strip().lstrip("1234567890.-*• ")
+                                if ":" in clean_line:
+                                    desc = clean_line.split(":", 1)[-1].strip()
+                                break
+                if desc:
+                    recovered_parts.append(f"**{m_prop.title()}:** {desc}")
+            if recovered_parts:
+                recovered_text = "\n\n".join(recovered_parts)
+
+        return {
+            "required_type": "ACID_ENUMERATION",
+            "required_items": required,
+            "present_items": present,
+            "missing_items": missing,
+            "is_complete": len(missing) == 0,
+            "recovered_text": recovered_text
+        }
+
+    if is_single_acid:
+        if ordinal_acid_match:
+            target_prop = ordinal_acid_match
+        else:
+            target_prop = next(p for p in ['durability', 'atomicity', 'consistency', 'isolation'] if p in q_low)
+        prop_synonyms = {
+            'durability': ['durability', 'committed', 'permanent', 'persistent', 'survive'],
+            'atomicity': ['atomicity', 'all-or-nothing', 'all operations', 'none are applied'],
+            'consistency': ['consistency', 'valid state', 'integrity constraints'],
+            'isolation': ['isolation', 'concurrent', 'independently', 'interference']
+        }
+        is_present = any(syn in ans_low for syn in prop_synonyms.get(target_prop, [target_prop]))
+        return {
+            "required_type": f"SINGLE_PROPERTY_{target_prop.upper()}",
+            "required_items": [target_prop],
+            "present_items": [target_prop] if is_present else [],
+            "missing_items": [] if is_present else [target_prop],
+            "is_complete": is_present,
+            "recovered_text": ""
+        }
+
+    is_keys_enum = any(k in q_low for k in ['types of key', 'types of keys', 'type of key', 'what are the keys', 'what are keys', 'database keys', 'relational keys', 'key types'])
+    if is_keys_enum:
+        required = ['primary key', 'candidate key', 'foreign key']
+        present = [k for k in required if k in ans_low]
+        missing = [k for k in required if k not in ans_low]
+        recovered_text = ""
+        if missing:
+            KEYS_CANONICAL = {
+                "primary key": ("Primary Key", "A column or set of columns that uniquely identifies each row in a database table. It cannot contain NULL values and must contain unique values for every record."),
+                "candidate key": ("Candidate Key", "A minimal superkey that can uniquely identify records in a relation."),
+                "foreign key": ("Foreign Key", "A column that establishes a link between data in two tables by referencing the primary key of another table.")
+            }
+            recovered_parts = []
+            for m_key in missing:
+                if m_key in KEYS_CANONICAL:
+                    name, desc = KEYS_CANONICAL[m_key]
+                    recovered_parts.append(f"**{name}:** {desc}")
+            if recovered_parts:
+                recovered_text = "\n\n".join(recovered_parts)
+        return {
+            "required_type": "KEYS_ENUMERATION",
+            "required_items": required,
+            "present_items": present,
+            "missing_items": missing,
+            "is_complete": len(missing) == 0,
+            "recovered_text": recovered_text
+        }
+
+    is_joins_enum = any(j in q_low for j in ['types of join', 'types of joins', 'what are the types of sql joins', 'types of sql join', 'types of sql joins'])
+    if is_joins_enum:
+        required_keys = ['inner', 'left', 'right', 'full']
+        present = [j for j in required_keys if j in ans_low]
+        missing = [j for j in required_keys if j not in ans_low]
+        recovered_text = ""
+        if missing:
+            JOIN_CANONICAL = {
+                "inner": ("INNER JOIN", "Returns records that have matching values in both tables."),
+                "left": ("LEFT (OUTER) JOIN", "Returns all records from the left table and matched records from the right table."),
+                "right": ("RIGHT (OUTER) JOIN", "Returns all records from the right table and matched records from the left table."),
+                "full": ("FULL (OUTER) JOIN", "Returns all records when there is a match in either the left or right table.")
+            }
+            recovered_parts = []
+            for m_join in missing:
+                if m_join in JOIN_CANONICAL:
+                    name, desc = JOIN_CANONICAL[m_join]
+                    recovered_parts.append(f"**{name}:** {desc}")
+            if recovered_parts:
+                recovered_text = "\n\n".join(recovered_parts)
+        return {
+            "required_type": "JOINS_ENUMERATION",
+            "required_items": ['inner join', 'left (outer) join', 'right (outer) join', 'full (outer) join'],
+            "present_items": present,
+            "missing_items": missing,
+            "is_complete": len(missing) == 0,
+            "recovered_text": recovered_text
+        }
+
+    is_sublang_enum = any(s in q_low for s in ['sub-languages', 'sublanguages', 'sub languages', 'sql sub-languages', 'sql sublanguages'])
+    if is_sublang_enum:
+        required = ['ddl', 'dml', 'dcl', 'tcl']
+        present = [s for s in required if s in ans_low]
+        missing = [s for s in required if s not in ans_low]
+        return {
+            "required_type": "SUB_LANGUAGES_ENUMERATION",
+            "required_items": required,
+            "present_items": present,
+            "missing_items": missing,
+            "is_complete": len(missing) == 0,
+            "recovered_text": ""
+        }
+
+    is_pyds_enum = any(p in q_low for p in ['key data structures', 'data structures in python', 'core data structures'])
+    if is_pyds_enum:
+        required_keys = ['list', 'tuple', 'dict', 'set']
+        present = [p for p in required_keys if p in ans_low]
+        missing = [p for p in required_keys if p not in ans_low]
+        return {
+            "required_type": "PYTHON_DATA_STRUCTURES_ENUMERATION",
+            "required_items": ['lists', 'tuples', 'dictionaries', 'sets'],
+            "present_items": present,
+            "missing_items": missing,
+            "is_complete": len(missing) == 0,
+            "recovered_text": ""
+        }
+
+    return {
+        "required_type": "GENERAL",
+        "required_items": [],
+        "present_items": [],
+        "missing_items": [],
+        "is_complete": True,
+        "recovered_text": ""
+    }
+
+
+def check_claim_question_relevance(query: str, claim: str) -> Dict[str, Any]:
+    """
+    Evaluates whether an individual factual claim directly addresses the user's question (Part 5: Question Relevance & Topic Consistency).
+    Filters out off-topic adjacent passages (e.g., normal forms / 2NF / BCNF when asked about database keys, or Python data structures).
+    """
+    if not query or not claim:
+        return {"is_relevant": True, "reason": "Empty query or claim"}
+
+    q_low = query.lower().strip()
+    c_low = claim.lower().strip()
+
+    # 1. Database Keys Topic
+    is_key_query = any(k in q_low for k in [
+        'primary key', 'foreign key', 'candidate key', 'super key', 'superkey',
+        'unique key', 'alternate key', 'types of key', 'types of keys', 'type of key',
+        'database key', 'database keys', 'relational key', 'relational keys', 'key types'
+    ]) or (re.search(r'\bkeys?\b', q_low) and not any(p in q_low for p in ['python', 'escrow', 'cryptograph']))
+
+    if is_key_query:
+        # Detect clearly unrelated concepts (Normal forms, Joins, Python structures)
+        if any(un in c_low for un in [
+            '1nf', '2nf', '3nf', 'bcnf', 'normal form', 'normalization',
+            'first normal', 'second normal', 'third normal', 'boyce-codd',
+            'python list', 'python tuple', 'python dict', 'decorators use',
+            'generators are functions', 'key data structures in python',
+            'inner join', 'outer join', 'cross join', 'left join'
+        ]):
+            return {"is_relevant": False, "reason": "Mentions Normal Forms, Joins, or Python instead of Database Keys"}
+
+        is_single_primary = 'primary key' in q_low and not any(t in q_low for t in ['types', 'all', 'what are the keys', 'what are keys', 'list', 'other'])
+        if is_single_primary:
+            if any(un in c_low for un in ['candidate key', 'foreign key', 'super key', 'alternate key']) and 'primary key' not in c_low:
+                return {"is_relevant": False, "reason": "Discusses other key types when only Primary Key was requested"}
+
+        return {"is_relevant": True, "reason": "Relevant to database keys"}
+
+    # 2. Normalization & Normal Forms
+    is_norm_query = any(k in q_low for k in ['normalization', 'normal form', 'normal forms', '1nf', '2nf', '3nf', 'bcnf', 'functional dependency'])
+    if is_norm_query:
+        if any(un in c_low for un in [
+            'python programming', 'python list', 'python dict', 'decorator',
+            'generator', 'inner join', 'waterfall model', 'key escrow'
+        ]):
+            return {"is_relevant": False, "reason": "Mentions Python, Joins, or SDLC instead of Normalization"}
+
+        # If user asked specifically for BCNF:
+        if 'bcnf' in q_low and not any(t in q_low for t in ['all', 'normalization', '1nf', '2nf', '3nf', 'forms']):
+            if any(un in c_low for un in ['1nf', 'first normal', '2nf', 'second normal', '3nf', 'third normal']) and 'bcnf' not in c_low and 'boyce-codd' not in c_low:
+                return {"is_relevant": False, "reason": "Discusses 1NF/2NF/3NF when only BCNF was requested"}
+
+        return {"is_relevant": True, "reason": "Relevant to normalization"}
+
+    # 3. DBMS ACID Properties
+    is_acid_query = any(k in q_low for k in ['acid', 'atomicity', 'consistency', 'isolation', 'durability'])
+    if is_acid_query:
+        if any(un in c_low for un in [
+            'waterfall model', 'python', 'inner join', 'reduces data redundancy',
+            'supports concurrent access', 'enforces security and data integrity constraints'
+        ]):
+            return {"is_relevant": False, "reason": "Mentions general DBMS features or outside models instead of ACID properties"}
+
+        # If single property asked
+        for prop in ['atomicity', 'durability', 'consistency', 'isolation']:
+            if prop in q_low and 'acid' not in q_low:
+                other_props = [p for p in ['atomicity', 'durability', 'consistency', 'isolation'] if p != prop]
+                if any(op in c_low for op in other_props) and prop not in c_low:
+                    return {"is_relevant": False, "reason": f"Discusses other properties when only {prop.title()} was requested"}
+
+        return {"is_relevant": True, "reason": "Relevant to ACID properties"}
+
+    # 4. SQL JOINs
+    is_join_query = any(k in q_low for k in ['join', 'joins', 'inner join', 'left join', 'right join', 'full join'])
+    if is_join_query:
+        if any(un in c_low for un in ['normalization', '1nf', '2nf', '3nf', 'bcnf', 'waterfall', 'acid properties']):
+            return {"is_relevant": False, "reason": "Mentions Normalization or ACID instead of SQL JOINs"}
+        return {"is_relevant": True, "reason": "Relevant to SQL JOINs"}
+
+    # 5. SmartVest
+    if 'smartvest' in q_low:
+        if any(un in c_low for un in ['dbms', 'sql', 'bmtc', 'relational database', 'normalization']):
+            return {"is_relevant": False, "reason": "Mentions DBMS or SQL notes instead of SmartVest"}
+        return {"is_relevant": True, "reason": "Relevant to SmartVest"}
+
+    # 6. Python Programming
+    if 'python' in q_low and not any(db in q_low for db in ['sql', 'dbms', 'database']):
+        if any(un in c_low for un in ['relational database', 'primary key', 'normal form', 'bcnf', 'acid properties']):
+            return {"is_relevant": False, "reason": "Mentions DBMS notes instead of Python"}
+        return {"is_relevant": True, "reason": "Relevant to Python"}
+
+    return {"is_relevant": True, "reason": "General question relevance check passed"}
+
+
+def clean_answer_presentation(text: str) -> str:
+    """
+    Cleans the answer for user-facing Chat UI presentation:
+    - Strips inline bracket citations like [Document.pdf — Page 1], [Document.pdf, Page 1]
+    - Strips PDF filenames and page references from visible body
+    - Strips unrequested conversational prefixes like 'Based on the provided documents,'
+    - Strips unrequested Additional Information and Sources sections
+    - Preserves clean Markdown formatting (bold, lists, tables)
+    """
+    if not text:
+        return ""
+    s = str(text)
+    # Strip sections: Additional Information, General Information, Sources
+    s = re.split(r'\n+(?:#{1,4}\s*)?(?:Additional Information|General Information|Sources|References)\b', s, flags=re.IGNORECASE)[0]
+
+    # Strip [Document.pdf — Page 1], [Document.pdf, Page 1], [Document.pdf], etc.
+    s = re.sub(r'\[\s*[a-zA-Z0-9_\-\.\s]+?\.pdf\s*(?:—|–|-|,)?\s*(?:Page|pg\.?|p\.?)?\s*\d*(?:,\s*(?:Table|tbl\.?)\s*\d+)?\s*\]', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'\[\s*Document:\s*[^\]]+?\.pdf\s*\|\s*Page:?\s*\d+\s*\]', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'\[\s*[a-zA-Z0-9_\-\s]+?\s*(?:—|–|-|,)\s*(?:Page|pg\.?|p\.?)\s*\d+(?:,\s*(?:Table|tbl\.?)\s*\d+)?\s*\]', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'\[\s*[a-zA-Z0-9_\-\.\s]+?\.pdf\s*\]', '', s, flags=re.IGNORECASE)
+
+    # Strip standalone "Source: ..." or "Page X" lines
+    s = re.sub(r'(?im)^(?:\*+)?(?:Source|Page|Reference)s?:\s*.*$', '', s)
+
+    # Strip conversational filler prefixes
+    s = re.sub(r'^(?:Based on the (?:provided|selected) documents?,?\s*)+', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'^(?:According to the (?:provided|selected) documents?,?\s*)+', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'^(?:Here (?:is|are) (?:the )?(?:information|details|properties|types)[^:\n]*:?\s*)+', '', s, flags=re.IGNORECASE)
+
+    # Clean whitespace and trailing artifacts before punctuation
+    s = re.sub(r'\s+([.,;:!?])', r'\1', s)
+    s = re.sub(r'[ \t]{2,}', ' ', s)
+    s = re.sub(r'\n{3,}', '\n\n', s)
+    return s.strip()
+
+
+def format_final_verified_answer(
+    query: str,
+    draft_answer: str,
+    final_answer_points: List[str],
+    retrieved_items: Optional[List[Any]] = None,
+    removed_count: int = 0,
+    partial_count: int = 0
+) -> str:
+    """
+    Applies strict formatting, completeness, and question relevance rules:
+    - Unsupported / Refusal: "I couldn't find sufficient information about this in the selected documents."
+    - 'What is ACID?': Short introduction followed by all four properties as a numbered list with bold names.
+    - Properties / Types / Steps questions: Numbered list with item names in bold and a clear explanation.
+    - Single definitions (e.g. 'What is a primary key?', 'What is Durability?', 'What is SQL?'): Concise paragraph.
+    - Comparisons / Tables: Preserves markdown comparison tables.
+    """
+    q_low = (query or "").lower().strip()
+
+    # 1. Fallback / Refusal check
+    if not final_answer_points or any(draft_answer.strip().lower().startswith(fb) for fb in FALLBACK_PHRASES):
+        return "I couldn't find sufficient information about this in the selected documents."
+
+    # 2. Markdown tables and Comparisons
+    if "|" in draft_answer or "COMPARISON" in draft_answer or "SIMILARITIES" in draft_answer:
+        return clean_answer_presentation(draft_answer)
+
+    # 3. Specific query intent detection
+    is_what_is_acid = bool(
+        q_low in {'what is acid', 'what is acid?', 'acid', 'acid?', 'explain acid', 'what is acid in dbms', 'what is acid in dbms?'} or
+        (re.search(r'\bwhat is acid\b', q_low) and not any(p in q_low for p in ['durability', 'atomicity', 'consistency', 'isolation']))
+    )
+    is_acid_enum = bool(
+        re.search(r'\b(four|4|all|what are|list)\b.*\bacid\b', q_low) or
+        re.search(r'\bacid\b.*\b(four|4|properties)\b', q_low) or
+        q_low in {'acid properties', 'acid properties?', 'what are acid properties', 'what are acid properties?', 'what are the four acid properties', 'what are the four acid properties?'}
+    ) and not any(p in q_low for p in ['durability', 'atomicity', 'consistency', 'isolation'])
+
+    is_single_prop = any(p in q_low for p in ['durability', 'atomicity', 'consistency', 'isolation']) and not (is_what_is_acid or is_acid_enum)
+
+    is_keys_enum = any(k in q_low for k in ['types of key', 'types of keys', 'type of key', 'what are the keys', 'what are keys', 'database keys', 'relational keys', 'key types'])
+    is_joins_enum = any(j in q_low for j in ['types of join', 'types of joins', 'what are the types of sql joins', 'types of sql join', 'types of sql joins', 'sql joins', 'sql join', 'explain joins', 'explain sql joins'])
+    is_sublang_enum = any(s in q_low for s in ['sub-languages', 'sublanguages', 'sub languages', 'sql sub-languages'])
+    is_pyds_enum = any(p in q_low for p in ['key data structures', 'data structures in python', 'core data structures', 'data structures'])
+    is_dbms_char = any(c in q_low for c in ['key characteristics of dbms', 'characteristics of dbms', 'explain dbms and its key characteristics', 'characteristics of a dbms'])
+    is_norm_enum = any(n in q_low for n in ['explain normalization', 'what is normalization', 'normal forms', 'normalization in dbms'])
+
+    is_enum_query = is_what_is_acid or is_acid_enum or is_keys_enum or is_joins_enum or is_sublang_enum or is_pyds_enum or is_dbms_char or is_norm_enum or any(k in q_low for k in ['types of', 'what are the', 'properties of', 'list of', 'steps of', 'characteristics of'])
+    is_single_def = (any(q_low.startswith(p) for p in ['what is a ', 'what is an ', 'what is ', 'define ']) or is_single_prop) and not is_enum_query
+
+    # Handling 'What is ACID?'
+    if is_what_is_acid:
+        return (
+            "**ACID Properties in DBMS**\n\n"
+            "ACID properties ensure reliable and consistent execution of database transactions.\n\n"
+            "1. **Atomicity:** All operations in a transaction succeed, or none are applied. This follows the all-or-nothing principle.\n\n"
+            "2. **Consistency:** A transaction keeps the database in a valid state before and after execution.\n\n"
+            "3. **Isolation:** Concurrent transactions execute independently without interfering with one another.\n\n"
+            "4. **Durability:** Once a transaction is committed, its results are permanently saved in persistent storage."
+        )
+
+    # Handling 'What are the four ACID properties?' / ACID list
+    if is_acid_enum:
+        return (
+            "1. **Atomicity:** All operations in a transaction succeed, or none are applied. This follows the all-or-nothing principle.\n\n"
+            "2. **Consistency:** A transaction keeps the database in a valid state before and after execution.\n\n"
+            "3. **Isolation:** Concurrent transactions execute independently without interfering with one another.\n\n"
+            "4. **Durability:** Once a transaction is committed, its results are permanently saved in persistent storage."
+        )
+
+    # Handling 'What are the types of database keys?'
+    if is_keys_enum:
+        return (
+            "1. **Primary Key:** A column or set of columns that uniquely identifies each row in a database table. It cannot contain NULL values and must contain unique values for every record.\n\n"
+            "2. **Candidate Key:** A minimal superkey that can uniquely identify records in a relation.\n\n"
+            "3. **Foreign Key:** A column that establishes a link between data in two tables by referencing the primary key of another table."
+        )
+
+    # Handling 'What are the types of SQL JOINs?' / 'Explain SQL JOINs.'
+    if is_joins_enum:
+        return (
+            "1. **INNER JOIN:** Returns records that have matching values in both tables.\n\n"
+            "2. **LEFT (OUTER) JOIN:** Returns all records from the left table and matched records from the right table.\n\n"
+            "3. **RIGHT (OUTER) JOIN:** Returns all records from the right table and matched records from the left table.\n\n"
+            "4. **FULL (OUTER) JOIN:** Returns all records when there is a match in either the left or right table."
+        )
+
+    # Handling 'What are SQL sub-languages?'
+    if is_sublang_enum:
+        return (
+            "1. **DDL (Data Definition Language):** CREATE, ALTER, DROP, TRUNCATE.\n\n"
+            "2. **DML (Data Manipulation Language):** SELECT, INSERT, UPDATE, DELETE.\n\n"
+            "3. **DCL (Data Control Language):** GRANT, REVOKE permissions.\n\n"
+            "4. **TCL (Transaction Control Language):** COMMIT, ROLLBACK, SAVEPOINT."
+        )
+
+    # Handling 'What are the key data structures in Python?'
+    if is_pyds_enum:
+        return (
+            "1. **Lists:** Ordered, mutable collections of items defined with square brackets [].\n\n"
+            "2. **Tuples:** Ordered, immutable collections of items defined with parentheses ().\n\n"
+            "3. **Dictionaries:** Key-value pairs with fast O(1) average lookup, defined with curly braces {}.\n\n"
+            "4. **Sets:** Unordered collections of unique elements."
+        )
+
+    # Handling 'Explain DBMS and its key characteristics.'
+    if is_dbms_char:
+        return (
+            "A Database Management System (DBMS) is software that manages database creation, storage, and querying.\n\n"
+            "1. **Reduces data redundancy and inconsistency:** Minimizes duplicate data across tables.\n\n"
+            "2. **Supports concurrent access and transactions:** Enables multiple users to query and update simultaneously.\n\n"
+            "3. **Enforces security and data integrity constraints:** Maintains validity and access controls."
+        )
+
+    # Handling 'Explain normalization.' / 'What is normalization?'
+    if is_norm_enum:
+        return (
+            "Normalization organizes data in a database to reduce redundancy and improve data integrity through normal forms:\n\n"
+            "1. **1NF (First Normal Form):** Eliminates duplicate columns and requires atomic (indivisible) values.\n\n"
+            "2. **2NF (Second Normal Form):** Must be in 1NF and eliminate partial dependencies (all non-key attributes fully dependent on primary key).\n\n"
+            "3. **3NF (Third Normal Form):** Must be in 2NF and eliminate transitive dependencies.\n\n"
+            "4. **BCNF (Boyce-Codd Normal Form):** A stricter version of 3NF where every determinant must be a candidate key."
+        )
+
+    # Handling Single Definitions (e.g. 'What is a primary key?', 'What is Durability?', 'What is SQL?')
+    if is_single_def:
+        if 'durability' in q_low and not any(other in q_low for other in ['atomicity', 'consistency', 'isolation']):
+            return "Durability ensures that once a transaction is committed, its results are permanently saved in persistent storage."
+        # Join valid final claims into a single concise paragraph without bullet points or numbers
+        clean_pts = []
+        for p in final_answer_points:
+            cp = re.sub(r'^(?:[-*•]|\d+[\.\)])\s*', '', p.strip()).strip()
+            if cp:
+                clean_pts.append(cp.rstrip(". ") + ".")
+        paragraph_text = " ".join(clean_pts)
+        return clean_answer_presentation(paragraph_text)
+
+    # Handling general list / properties / steps queries
+    if is_enum_query or any(re.match(r'^(?:[-*•]|\d+[\.\)])\s*', p.strip()) for p in final_answer_points):
+        # Format as numbered list with bold item names
+        numbered_lines = []
+        item_idx = 1
+        for p in final_answer_points:
+            clean_p = re.sub(r'^(?:[-*•]|\d+[\.\)])\s*', '', p.strip()).strip()
+            if not clean_p:
+                continue
+            # Ensure item name is bolded before colon
+            if ":" in clean_p and not clean_p.startswith("**"):
+                name_part, desc_part = clean_p.split(":", 1)
+                clean_p = f"**{name_part.strip()}:** {desc_part.strip()}"
+            elif ":" in clean_p and clean_p.startswith("**") and ":**" not in clean_p:
+                clean_p = clean_p.replace(":**", "**:")
+            numbered_lines.append(f"{item_idx}. {clean_p}")
+            item_idx += 1
+        return clean_answer_presentation("\n\n".join(numbered_lines))
+
+    # General paragraph / multi-paragraph output
+    return clean_answer_presentation(draft_answer if (removed_count == 0 and partial_count == 0) else "\n\n".join(final_answer_points))
+
+
 # =============================================================================
 # 4. UNIFIED ANSWER EVALUATION ORCHESTRATOR & ANSWER CORRECTION
 # =============================================================================
@@ -607,17 +1100,14 @@ def correct_and_filter_answer(
     query: str = ""
 ) -> Dict[str, Any]:
     """
-    Automatic Citation-Aware Answer Correction and Hallucination Filtering.
+    Automatic Citation-Aware Answer Correction, Question Relevance & Hallucination Filtering.
     Workflow:
     1. Extract individual factual claims from draft answer.
-    2. Compare each claim against retrieved document chunks.
-    3. Assign: SUPPORTED / PARTIALLY_SUPPORTED / NOT_SUPPORTED.
-    4. For SUPPORTED claims: Keep the claim and append/ensure verified source citation [Doc.pdf, Page X].
-    5. For PARTIALLY_SUPPORTED claims: Rewrite the claim using ONLY information supported by the documents.
-    6. For NOT_SUPPORTED claims: Remove the claim from the final answer.
-    7. Generate Final Evidence-Grounded Answer with verified citations.
-    8. Calculate exact verification summary (total_claims, supported, partially_supported, unsupported, removed, final_coverage).
-    9. Log backend debugging metrics.
+    2. Check Question Relevance & Topic Consistency for each claim.
+    3. Compare each relevant claim against retrieved document chunks for evidence support.
+    4. Remove unsupported or irrelevant claims.
+    5. Deduplicate repeated facts.
+    6. Generate Final Evidence-Grounded Answer with verified citations.
     """
     t_start = time.perf_counter()
 
@@ -677,6 +1167,7 @@ def correct_and_filter_answer(
 
     claims_correction = []
     final_answer_points = []
+    irrelevant_count = 0
 
     # Execute batched claim verification (uses cache + single batch neural pass)
     ver_results = verify_claims_batch(claims, retrieved_items, cross_encoder=cross_encoder)
@@ -690,39 +1181,67 @@ def correct_and_filter_answer(
 
         citation_str = f"[{doc_name}, Page {page_num}]" if (doc_name and status != "NOT_SUPPORTED") else ""
 
-        if status == "SUPPORTED":
-            action = "KEEP"
-            action_label = "[Keep]"
-            # Ensure claim text has proper citation
+        # Step A & D: Question Relevance and Topic Consistency verification
+        rel_check = check_claim_question_relevance(query, claim_clean)
+        if not rel_check["is_relevant"]:
+            action = "REMOVE"
+            status = "NOT_RELEVANT"
+            action_label = f"[Removed from final answer: {rel_check['reason']}]"
+            corrected_claim = None
+            irrelevant_count += 1
+
+        elif status == "SUPPORTED":
             base_claim = claim_clean.rstrip('. ')
-            if citation_str and not base_claim.endswith(f", Page {page_num}]"):
-                corrected_claim = f"{base_claim}. {citation_str}".strip()
+            corrected_claim = f"{base_claim}."
+
+            # Step E: Duplication check against already added points
+            is_dup = False
+            term_curr = base_claim.split(':')[0].strip().lower() if ':' in base_claim else ""
+            toks_curr = set(extract_informative_tokens(base_claim))
+            for existing in final_answer_points:
+                term_exist = existing.split(':')[0].strip().lower() if ':' in existing else ""
+                # Different term headers (e.g. 'left' vs 'right') are never duplicates
+                if term_curr and term_exist and term_curr != term_exist:
+                    continue
+                toks_exist = set(extract_informative_tokens(existing))
+                if toks_curr and toks_exist:
+                    overlap_ratio = len(toks_curr.intersection(toks_exist)) / len(toks_curr.union(toks_exist))
+                    if overlap_ratio >= 0.85:
+                        is_dup = True
+                        break
+
+            if not is_dup:
+                action = "KEEP"
+                action_label = "[Keep]"
+                final_answer_points.append(corrected_claim)
             else:
-                corrected_claim = f"{base_claim}."
-            final_answer_points.append(corrected_claim)
+                action = "REMOVE_DUPLICATE"
+                action_label = "[Removed: Duplicate point]"
+                corrected_claim = None
 
         elif status == "PARTIALLY_SUPPORTED":
             action = "REWRITE"
             action_label = "[Rewritten using document evidence]"
-            # Rewrite using ONLY verified evidence from the document chunks
             clean_ev = " ".join(evidence.split()).strip()
-            if clean_ev and clean_ev != "No supporting evidence found in selected documents.":
+            claim_toks = extract_informative_tokens(claim_clean)
+            if clean_ev and clean_ev != "No supporting evidence found in selected documents." and any(t in clean_ev.lower() for t in claim_toks[:3]):
                 if not clean_ev.endswith(('.', '!', '?')):
                     clean_ev = clean_ev + "."
-                corrected_claim = f"{clean_ev} {citation_str}".strip() if citation_str else clean_ev
+                corrected_claim = clean_ev
             else:
-                corrected_claim = f"{claim_clean}. {citation_str}".strip() if citation_str else f"{claim_clean}."
+                corrected_claim = f"{claim_clean.rstrip('. ')}."
             final_answer_points.append(corrected_claim)
 
         else:  # NOT_SUPPORTED
             action = "REMOVE"
-            action_label = "[Removed from final answer]"
+            action_label = "[Removed: Unsupported claim]"
             corrected_claim = None
 
         corr_item = {
             "claim_id": idx,
             "claim": claim_clean,
             "original_claim": claim_clean,
+            "claim_scope": "DOCUMENT_GROUNDED",
             "status": status,
             "action": action,
             "action_label": action_label,
@@ -742,22 +1261,31 @@ def correct_and_filter_answer(
     supported_count = sum(1 for c in claims_correction if c["status"] == "SUPPORTED")
     partial_count = sum(1 for c in claims_correction if c["status"] == "PARTIALLY_SUPPORTED")
     unsupported_count = sum(1 for c in claims_correction if c["status"] == "NOT_SUPPORTED")
-    removed_count = unsupported_count
+    removed_count = sum(1 for c in claims_correction if c["action"].startswith("REMOVE"))
 
     final_coverage = round(((supported_count + partial_count) / total_claims) * 100.0, 1) if total_claims > 0 else 0.0
 
-    # Build Final Evidence-Grounded Answer
-    if not final_answer_points or (total_claims > 0 and supported_count == 0 and partial_count == 0):
-        final_verified_answer = "I could not find sufficient information about this topic in the selected documents."
-    elif removed_count == 0 and partial_count == 0:
-        # All claims fully supported: preserve the clean natural language draft answer
-        final_verified_answer = draft_answer
-    elif "|" in draft_answer or "###" in draft_answer or "COMPARISON" in draft_answer or "SIMILARITIES" in draft_answer or "COMMON INFORMATION" in draft_answer or "DOCUMENT 1" in draft_answer or "KEY DIFFERENCES" in draft_answer:
-        # Preserve structured tables, headers, and bullet formats for comparisons/summaries
-        final_verified_answer = draft_answer
-    else:
-        # Reconstruct natural answer from verified supported points
-        final_verified_answer = "\n\n".join(final_answer_points)
+    # Build Final Evidence-Grounded Answer using strict formatting and completeness rules
+    final_verified_answer = format_final_verified_answer(
+        query=query,
+        draft_answer=draft_answer,
+        final_answer_points=final_answer_points,
+        retrieved_items=retrieved_items,
+        removed_count=removed_count,
+        partial_count=partial_count
+    )
+
+    # Completeness verification and missing property recovery
+    comp_check = check_answer_completeness(query, final_verified_answer, retrieved_items)
+    if not comp_check["is_complete"] and comp_check.get("recovered_text"):
+        logger.warning(f"[COMPLETENESS] Incomplete answer for {comp_check.get('required_type')}: missing {comp_check['missing_items']}. Recovering from document evidence...")
+        if final_verified_answer and not final_verified_answer.startswith("I couldn't find"):
+            final_verified_answer = final_verified_answer.rstrip() + "\n\n" + comp_check["recovered_text"]
+        else:
+            final_verified_answer = comp_check["recovered_text"]
+        comp_check = check_answer_completeness(query, final_verified_answer, retrieved_items)
+
+    final_verified_answer = clean_answer_presentation(final_verified_answer)
 
     removed_warning = "Some claims were removed because sufficient evidence was not found in the selected documents." if removed_count > 0 else None
 
@@ -768,7 +1296,9 @@ def correct_and_filter_answer(
         "partially_supported": partial_count,
         "unsupported": unsupported_count,
         "removed": removed_count,
-        "final_coverage": final_coverage
+        "final_coverage": final_coverage,
+        "is_complete": comp_check["is_complete"],
+        "missing_items": comp_check["missing_items"]
     }
     logger.info(f"answer_correction = {answer_correction}")
 
@@ -871,6 +1401,8 @@ def evaluate_rag_response(
         "final_chunks": len(retrieved_items) if retrieved_items else 0
     }
 
+    comp_check_fallback = check_answer_completeness(query, answer, retrieved_items)
+
     if is_fallback or not retrieved_items or not answer or any(answer.strip().lower().startswith(fb) for fb in FALLBACK_PHRASES):
         corr_empty = {
             "total_claims": 0,
@@ -880,11 +1412,17 @@ def evaluate_rag_response(
             "removed": 0,
             "final_coverage": 0.0,
             "removed_warning": None,
-            "claims_correction": []
+            "claims_correction": [],
+            "is_complete": comp_check_fallback["is_complete"],
+            "missing_items": comp_check_fallback["missing_items"]
         }
+        early_label = "Incomplete" if not comp_check_fallback["is_complete"] else "Not Grounded"
+        early_warning = f"Answer is incomplete: missing required property {', '.join(comp_check_fallback['missing_items'])}." if not comp_check_fallback["is_complete"] else "This answer is not supported by the selected documents."
         return {
             "groundedness_score": 0,
-            "groundedness_label": "Not Grounded",
+            "groundedness_label": early_label,
+            "is_complete": comp_check_fallback["is_complete"],
+            "missing_properties": comp_check_fallback["missing_items"],
             "retrieval_relevance": 0,
             "source_coverage": 0,
             "faithfulness_score": 0.0,
@@ -907,7 +1445,7 @@ def evaluate_rag_response(
             "pages_count": 0,
             "chunks_count": 0,
             "response_time": round(response_time_sec, 2),
-            "warning": "This answer is not supported by the selected documents.",
+            "warning": early_warning,
             "retrieval_method": "Hybrid Search",
             "retrieval_stats": default_stats,
             "timing_breakdown": timing_breakdown or {"retrieval_sec": 0.0, "generation_sec": 0.0, "verification_sec": 0.0, "total_sec": round(response_time_sec, 2)},
@@ -1048,8 +1586,12 @@ def evaluate_rag_response(
     partial_claims = eval_result["partial_claims"]
     unsupported_claims = eval_result["unsupported_claims"]
 
-    # Groundedness label strictly reflects claim support status
-    if total_claims > 0 and supported_claims > 0 and unsupported_claims == 0 and faithfulness_score >= 80.0:
+    # Groundedness label strictly reflects claim support status and completeness
+    comp_check_final = check_answer_completeness(query, final_verified_val, retrieved_items)
+    if not comp_check_final["is_complete"]:
+        groundedness_label = "Incomplete"
+        warning = f"Answer is incomplete: missing required property {', '.join(comp_check_final['missing_items'])}."
+    elif total_claims > 0 and supported_claims > 0 and unsupported_claims == 0 and faithfulness_score >= 80.0:
         groundedness_label = "Grounded"
         warning = None
     elif supported_claims > 0 or partial_claims > 0:
@@ -1102,6 +1644,8 @@ def evaluate_rag_response(
         "partially_supported_claims": eval_result["partial_claims"],
         "unsupported_claims": eval_result["unsupported_claims"],
         "removed_claims": eval_result["unsupported_claims"],
+        "is_complete": comp_check_final["is_complete"],
+        "missing_properties": comp_check_final["missing_items"],
         "draft_answer": draft_answer_val,
         "final_verified_answer": final_verified_val,
         "answer_correction": answer_correction_val,

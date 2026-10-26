@@ -16,6 +16,66 @@ function escapeHtml(str) {
 window.escapeHtml = escapeHtml;
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Theme Toggle Elements & Handlers
+    const btnThemeToggle = document.getElementById('btn-theme-toggle');
+    const themeToggleIcon = document.getElementById('theme-toggle-icon');
+    const themeToggleLabel = document.getElementById('theme-toggle-label');
+
+    function applyTheme(theme, animate = false) {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+        const nextTheme = (theme === 'dark' || theme === 'light') ? theme : 'light';
+        
+        const updateDOM = () => {
+            document.documentElement.setAttribute('data-theme', nextTheme);
+            try {
+                localStorage.setItem('rag_theme', nextTheme);
+            } catch (e) {
+                console.warn('Could not persist theme to localStorage:', e);
+            }
+            if (themeToggleIcon && themeToggleLabel) {
+                if (nextTheme === 'dark') {
+                    themeToggleIcon.textContent = '☀️';
+                    themeToggleLabel.textContent = 'Light';
+                    if (btnThemeToggle) {
+                        btnThemeToggle.setAttribute('aria-label', 'Switch to light mode');
+                        btnThemeToggle.setAttribute('title', 'Switch Theme (Light / Dark)');
+                    }
+                } else {
+                    themeToggleIcon.textContent = '🌙';
+                    themeToggleLabel.textContent = 'Dark';
+                    if (btnThemeToggle) {
+                        btnThemeToggle.setAttribute('aria-label', 'Switch to dark mode');
+                        btnThemeToggle.setAttribute('title', 'Switch Theme (Light / Dark)');
+                    }
+                }
+            }
+        };
+
+        if (animate && typeof document.startViewTransition === 'function' && currentTheme !== nextTheme) {
+            document.startViewTransition(() => updateDOM());
+        } else {
+            updateDOM();
+        }
+    }
+    window.applyTheme = applyTheme;
+
+    // Synchronize theme UI on startup
+    try {
+        const savedTheme = localStorage.getItem('rag_theme') || document.documentElement.getAttribute('data-theme') || 'light';
+        applyTheme(savedTheme, false);
+    } catch (_) {
+        applyTheme('light', false);
+    }
+
+    if (btnThemeToggle) {
+        btnThemeToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            applyTheme(newTheme, true);
+        });
+    }
+
     // DOM Elements - Sidebar
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
@@ -33,9 +93,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnClearSelection = document.getElementById('btn-clear-selection');
     const statSelectedSummary = document.getElementById('stat-selected-summary');
 
-    // Status Panel Elements
+    // Status Panel & Counter Elements (Single Source of Truth)
     const systemStatus = document.getElementById('system-status');
     const statusText = document.getElementById('status-text');
+    const navBadgeDocs = document.getElementById('nav-badge-docs');
+    const sidebarMetaDocs = document.getElementById('sidebar-meta-docs');
+    const sidebarMetaChunks = document.getElementById('sidebar-meta-chunks');
+    const chatScopeDocText = document.getElementById('chat-scope-doc-text');
+    const dashMetricDocs = document.getElementById('dash-metric-docs');
+    const dashMetricChunks = document.getElementById('dash-metric-chunks');
+    const dashMetricPagesSub = document.getElementById('dash-metric-pages-sub');
+    const statDashDocs = document.getElementById('stat-dash-docs');
+    const statDashPages = document.getElementById('stat-dash-pages');
+    const statDashChunks = document.getElementById('stat-dash-chunks');
+    const statDashVsStatus = document.getElementById('stat-dash-vs-status');
     const statDocs = document.getElementById('stat-docs');
     const statIndexed = document.getElementById('stat-indexed');
     const statPending = document.getElementById('stat-pending');
@@ -51,9 +122,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatForm = document.getElementById('chat-form');
     const userInput = document.getElementById('user-input');
     const btnSend = document.getElementById('btn-send');
+    const btnOldChat = document.getElementById('btn-old-chat');
     const btnNewChat = document.getElementById('btn-new-chat');
     const btnClearChat = document.getElementById('btn-clear-chat');
     const alertBanner = document.getElementById('alert-banner');
+
+    // Old Chat Modal Elements
+    const oldChatModal = document.getElementById('old-chat-modal');
+    const btnCloseOldChat = document.getElementById('btn-close-old-chat');
+    const btnCancelOldChat = document.getElementById('btn-cancel-old-chat');
+    const oldChatBackdrop = document.getElementById('old-chat-backdrop');
+    const oldChatSearchInput = document.getElementById('old-chat-search-input');
+    const oldChatList = document.getElementById('old-chat-list');
+    const oldChatCountLabel = document.getElementById('old-chat-count-label');
 
     // Source Preview Modal Elements
     const sourceModal = document.getElementById('source-modal');
@@ -73,6 +154,124 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Active sources cache for preview lookup
     window.currentSourceCache = {};
+
+    let latestStatusData = null;
+
+    /**
+     * Single Source of Truth: Updates all document count badges and status panels
+     * across the sidebar, document management page, dashboard, and header.
+     */
+    function updateAllDocumentCounts(statusData) {
+        if (statusData && typeof statusData === 'object') {
+            latestStatusData = statusData;
+        }
+        const data = latestStatusData || {};
+
+        const totalDocs = (data.total_documents !== undefined)
+            ? data.total_documents
+            : allDocumentsList.length;
+
+        const totalChunks = (data.total_chunks !== undefined)
+            ? data.total_chunks
+            : allDocumentsList.reduce((acc, d) => acc + (d.chunks || 0), 0);
+
+        const totalPages = (data.total_pages !== undefined)
+            ? data.total_pages
+            : allDocumentsList.reduce((acc, d) => acc + (d.pages || 0), 0);
+
+        const indexedCount = (data.indexed_count !== undefined)
+            ? data.indexed_count
+            : (data.total_indexed !== undefined
+                ? data.total_indexed
+                : allDocumentsList.filter(d => (d.status || '').toLowerCase() === 'ready' || d.indexed).length);
+
+        const pendingCount = (data.pending_count !== undefined)
+            ? data.pending_count
+            : (data.total_pending !== undefined
+                ? data.total_pending
+                : allDocumentsList.filter(d => (d.status || '').toLowerCase() === 'pending').length);
+
+        const selectedCount = selectedDocs.size;
+
+        // 1. Sidebar Navigation Badge for Documents
+        const navBadge = navBadgeDocs || document.getElementById('nav-badge-docs');
+        if (navBadge) navBadge.textContent = totalDocs;
+
+        // 2. Sidebar Bottom Metadata Panel (e.g., "6 Docs • 45 Sections")
+        const metaDocs = sidebarMetaDocs || document.getElementById('sidebar-meta-docs');
+        if (metaDocs) metaDocs.textContent = `${totalDocs} Docs`;
+
+        const metaChunks = sidebarMetaChunks || document.getElementById('sidebar-meta-chunks');
+        if (metaChunks) metaChunks.textContent = `${totalChunks} Sections`;
+
+        // 3. Document Management Page Header Badge (e.g., "6 documents")
+        if (fileCountBadge) {
+            fileCountBadge.textContent = `${totalDocs} document${totalDocs === 1 ? '' : 's'}`;
+        }
+
+        // 4. Selection Counter (e.g., "6 of 6 selected")
+        if (selectedDocCount) {
+            selectedDocCount.textContent = `${selectedCount} of ${totalDocs} selected`;
+            if (selectedCount === 0 && totalDocs > 0) {
+                selectedDocCount.classList.add('empty');
+            } else {
+                selectedDocCount.classList.remove('empty');
+            }
+        }
+        if (statSelectedSummary) {
+            statSelectedSummary.textContent = `${selectedCount} of ${totalDocs} selected`;
+        }
+
+        // 5. Chat View Document Scope Badge
+        const chatScope = chatScopeDocText || document.getElementById('chat-scope-doc-text');
+        if (chatScope) {
+            if (totalDocs === 0) {
+                chatScope.textContent = 'No documents uploaded';
+            } else if (selectedCount === totalDocs) {
+                chatScope.textContent = `All Documents Active (${totalDocs} docs)`;
+            } else if (selectedCount === 0) {
+                chatScope.textContent = '0 Documents Selected (Check in Documents page)';
+            } else {
+                chatScope.textContent = `${selectedCount} of ${totalDocs} documents selected`;
+            }
+        }
+
+        // 6. Search Scope Badge
+        if (typeof updateSearchScopeBadge === 'function') {
+            updateSearchScopeBadge();
+        }
+
+        // 7. Dashboard Metrics
+        const dDocs = dashMetricDocs || document.getElementById('dash-metric-docs');
+        if (dDocs) dDocs.textContent = totalDocs;
+        const dChunks = dashMetricChunks || document.getElementById('dash-metric-chunks');
+        if (dChunks) dChunks.textContent = totalChunks;
+        const dPages = dashMetricPagesSub || document.getElementById('dash-metric-pages-sub');
+        if (dPages) dPages.textContent = `Across ${totalPages} total pages`;
+
+        // 8. Analytics Metrics Strip
+        const sDashDocs = statDashDocs || document.getElementById('stat-dash-docs');
+        if (sDashDocs) sDashDocs.textContent = totalDocs;
+        const sDashPages = statDashPages || document.getElementById('stat-dash-pages');
+        if (sDashPages) sDashPages.textContent = totalPages;
+        const sDashChunks = statDashChunks || document.getElementById('stat-dash-chunks');
+        if (sDashChunks) sDashChunks.textContent = totalChunks;
+        const sDashVsStatus = statDashVsStatus || document.getElementById('stat-dash-vs-status');
+        if (sDashVsStatus) {
+            const isReady = (data.vectorstore_ready !== undefined) ? data.vectorstore_ready : isVectorstoreReady;
+            sDashVsStatus.textContent = isReady ? 'Active' : (pendingCount > 0 ? 'Indexing' : 'Standby');
+            sDashVsStatus.className = isReady ? 'text-success' : 'text-warning';
+        }
+
+        // 9. Legacy / Hidden Stats
+        if (statDocs) statDocs.textContent = totalDocs;
+        if (statChunks) statChunks.textContent = totalChunks;
+        if (statPages) statPages.textContent = totalPages;
+        if (statIndexed) statIndexed.textContent = indexedCount;
+        if (statPending) statPending.textContent = pendingCount;
+        if (statModel && data.gemini_model) statModel.textContent = data.gemini_model;
+    }
+    window.updateAllDocumentCounts = updateAllDocumentCounts;
 
     // Initialize System Status on load
     fetchSystemStatus();
@@ -116,6 +315,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     function updateSelectionUI() {
+        // Keep all document counters in sync across sidebar, bottom panel, and badges
+        updateAllDocumentCounts();
+
         const total = allDocumentsList.length;
         const selected = selectedDocs.size;
 
@@ -1011,6 +1213,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // SMART SELECTION VALIDATION (Fix 6)
+        if (allDocumentsList.length === 0) {
+            showAlert('Please upload and index at least one PDF before asking document-related questions.', 'error');
+            return;
+        }
+
         if (selectedDocs.size === 0) {
             showAlert('Please select at least one document.', 'error');
             return;
@@ -1076,7 +1283,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 query: query,
                 question: query,
                 selected_documents: selectedArray,
-                session_id: 'default_session',
+                session_id: (typeof currentSessionId !== 'undefined' && currentSessionId) ? currentSessionId : 'default',
                 conversation: recentHistory,
                 history: recentHistory,
                 last_context: lastContext
@@ -1221,6 +1428,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     answer_correction: answerCorrection,
                     response_time: data.response_time
                 });
+
+                if (typeof saveActiveSessionState === 'function') {
+                    saveActiveSessionState();
+                }
             } else {
                 appendAIFailureMessage(
                     data.error || "Unable to retrieve information from the selected documents.",
@@ -1341,27 +1552,71 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderRecentQuestionsList() {
         const listEl = document.getElementById('recent-questions-list');
+        const countBadge = document.getElementById('history-count-badge');
+        const filterInput = document.getElementById('history-filter-input');
         if (!listEl) return;
-        const list = getRecentQuestions();
+
+        let list = getRecentQuestions();
+        const filterVal = filterInput ? filterInput.value.trim().toLowerCase() : '';
+        if (filterVal) {
+            list = list.filter(item => item && item.toLowerCase().includes(filterVal));
+        }
+
+        if (countBadge) {
+            countBadge.textContent = `${list.length} quer${list.length === 1 ? 'y' : 'ies'} recorded`;
+        }
+
         if (list.length === 0) {
-            listEl.innerHTML = '<li class="empty-recent-item">No recent questions yet.</li>';
+            listEl.innerHTML = filterVal
+                ? '<li class="empty-recent-item" style="padding:16px; color:var(--text-muted); text-align:center;">No matching questions found.</li>'
+                : '<li class="empty-recent-item" style="padding:16px; color:var(--text-muted); text-align:center;">No recent questions recorded yet. Questions you ask in Chat will appear here.</li>';
             return;
         }
+
         listEl.innerHTML = list.map((item, idx) => `
-            <li class="recent-question-item" title="Click to fill into input" onclick="populateRecentQuestion(${idx})">
+            <li class="recent-question-item" title="Click to populate question into Chat input" data-index="${idx}" onclick="populateRecentQuestion(${idx})">
                 <span class="recent-icon">💬</span>
                 <span class="recent-text">${escapeHtml(item)}</span>
             </li>
         `).join('');
     }
+    window.renderRecentQuestionsList = renderRecentQuestionsList;
+    window.renderHistoryPage = renderRecentQuestionsList;
 
-    window.populateRecentQuestion = function(index) {
-        const list = getRecentQuestions();
-        if (list[index] && userInput) {
-            userInput.value = list[index];
-            userInput.style.height = 'auto';
-            userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
-            userInput.focus();
+    window.populateRecentQuestion = function(indexOrText) {
+        let questionText = '';
+        if (typeof indexOrText === 'number') {
+            const list = getRecentQuestions();
+            questionText = list[indexOrText] || '';
+        } else if (typeof indexOrText === 'string') {
+            questionText = indexOrText;
+        }
+
+        if (!questionText) return;
+
+        // 1. Navigate to Chat workspace
+        if (typeof navigateToView === 'function') {
+            navigateToView('chat', true);
+        } else {
+            window.location.hash = '#chat';
+        }
+
+        // 2. Populate input field
+        const inputEl = document.getElementById('user-input') || userInput;
+        if (inputEl) {
+            inputEl.value = questionText;
+            inputEl.style.height = 'auto';
+            inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+
+            // Dispatch input event for any existing listeners
+            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+
+            // Focus and set cursor to the end of the text
+            inputEl.focus();
+            const len = inputEl.value.length;
+            if (typeof inputEl.setSelectionRange === 'function') {
+                inputEl.setSelectionRange(len, len);
+            }
         }
     };
 
@@ -1369,6 +1624,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnClearRecent) {
         btnClearRecent.addEventListener('click', () => {
             localStorage.removeItem(RECENT_QUESTIONS_KEY);
+            renderRecentQuestionsList();
+        });
+    }
+
+    const historyFilterInput = document.getElementById('history-filter-input');
+    if (historyFilterInput) {
+        historyFilterInput.addEventListener('input', () => {
             renderRecentQuestionsList();
         });
     }
@@ -2741,142 +3003,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
             });
 
-            if (uniqueSources.length > 0) {
-                const hasManySources = uniqueSources.length > 4;
-                const topPrimaryStr = primarySource || (uniqueSources[0] ? `${uniqueSources[0].document} — Page ${uniqueSources[0].page}` : '');
 
-                // Group sources by document for Requirement 5
-                const docGroupsMap = new Map();
-                uniqueSources.forEach(s => {
-                    if (!docGroupsMap.has(s.document)) {
-                        const docRelInfo = (documentRelevanceScores && documentRelevanceScores[s.document]) || {};
-                        const docRelPct = docRelInfo.relevance_pct || s.relevancePct;
-                        docGroupsMap.set(s.document, {
-                            document: s.document,
-                            docRelPct: docRelPct,
-                            isPrimary: topPrimaryStr.startsWith(s.document),
-                            pages: [s.page],
-                            items: [s]
-                        });
-                    } else {
-                        const grp = docGroupsMap.get(s.document);
-                        if (!grp.pages.includes(s.page)) grp.pages.push(s.page);
-                        grp.items.push(s);
-                        if (s.relevancePct > grp.docRelPct) grp.docRelPct = s.relevancePct;
-                    }
-                });
-
-                const docGroups = Array.from(docGroupsMap.values()).sort((a, b) => b.docRelPct - a.docRelPct);
-
-                sourcesHtml = `
-                    <div class="sources-block">
-                        <div class="sources-header-row">
-                            <div class="sources-title">
-                                <span>📄</span> SOURCES <span class="sources-count">(${docGroups.length} Document${docGroups.length === 1 ? '' : 's'}, ${uniqueSources.length} Section${uniqueSources.length === 1 ? '' : 's'})</span>
-                            </div>
-                            <div class="sources-header-controls">
-                                <div class="sources-sort-control">
-                                    <select class="sources-sort-select" onchange="sortSources(this)" title="Sort retrieved sources">
-                                        <option value="relevance">Highest Relevance</option>
-                                        <option value="page">Page Number</option>
-                                        <option value="document">Document Name</option>
-                                    </select>
-                                </div>
-                                ${hasManySources ? `
-                                    <button class="btn-toggle-sources" data-expanded="false" onclick="toggleSources(this)">
-                                        Show all (${uniqueSources.length})
-                                    </button>
-                                ` : ''}
-                            </div>
-                        </div>
-
-                        ${topPrimaryStr && topPrimaryStr !== 'None' ? `
-                            <div class="primary-source-card">
-                                <div class="primary-source-header">
-                                    <span class="ps-badge">⭐ PRIMARY SOURCE</span>
-                                    <span class="ps-label">${escapeHtml(topPrimaryStr)}</span>
-                                </div>
-                            </div>
-                        ` : ''}
-
-                        <!-- Grouped Sources Display (Requirement 1 & 5) -->
-                        <div class="grouped-sources-container" style="display:flex; flex-direction:column; gap:12px; margin-bottom:12px;">
-                            ${docGroups.map(grp => {
-                                const bInfo = getRelevanceBadge(grp.docRelPct);
-                                return `
-                                    <div class="grouped-source-item" style="border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.02); border-radius:8px; padding:10px 14px;">
-                                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; flex-wrap:wrap; gap:8px;">
-                                            <div style="display:flex; align-items:center; gap:8px;">
-                                                <span style="font-size:16px;">📄</span>
-                                                <strong style="color:#f1f5f9; font-size:13.5px;">${escapeHtml(grp.document)}</strong>
-                                                ${grp.isPrimary ? '<span style="background:rgba(245,158,11,0.15); color:#fbbf24; font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:4px;">PRIMARY</span>' : ''}
-                                            </div>
-                                            <div style="display:flex; align-items:center; gap:8px;">
-                                                <span style="color:#94a3b8; font-size:12px;">Document Relevance: <strong style="color:#38bdf8;">${grp.docRelPct}%</strong></span>
-                                                <span class="source-stars-pill ${bInfo.class}" style="font-size:11px; padding:2px 8px; border-radius:12px; font-weight:600;">
-                                                    ${bInfo.stars} ${bInfo.label}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
-                                            <span style="color:#64748b; font-size:11.5px;">Pages:</span>
-                                            ${grp.pages.map(p => `<span style="background:rgba(255,255,255,0.06); color:#cbd5e1; font-size:11px; padding:1px 6px; border-radius:4px;">Page ${p}</span>`).join('')}
-                                        </div>
-                                    </div>
-                                `;
-                            }).join('')}
-                        </div>
-
-                        <!-- Sources Grid with View PDF & View Excerpt -->
-                        <div class="sources-grid">
-                            ${uniqueSources.map((s, idx) => {
-                                const isHidden = idx >= 4;
-                                const highlightedSnippet = highlightMatchedTerms(s.snippet, userQuery);
-                                const tableBadge = (s.is_table || s.table_number) ? `<span class="source-table-tag">📊 Table ${s.table_number || 1}</span>` : '';
-                                const chunkBadge = s.chunksCount > 1 ? `<span class="source-chunks-badge" style="background:rgba(99,102,241,0.15); color:#818cf8; font-size:11px; padding:2px 6px; border-radius:4px;">🧩 ${s.chunksCount} supporting chunks</span>` : '';
-                                const bInfo = getRelevanceBadge(s.relevancePct);
-                                return `
-                                    <div class="source-item ${isHidden ? 'hidden-source' : ''}"
-                                         data-doc="${escapeHtml(s.document)}"
-                                         data-page="${s.page}"
-                                         data-relevance="${s.relevancePct}"
-                                         style="${isHidden ? 'display: none;' : ''}">
-                                        <div class="source-item-top">
-                                            <a href="${s.pdfUrl}" target="_blank" rel="noopener noreferrer" class="source-doc-link" title="Open ${escapeHtml(s.document)} in browser at Page ${s.page}">
-                                                <span class="src-icon">📄</span> <span class="src-filename">${escapeHtml(s.document)}</span>
-                                            </a>
-                                            <span class="source-page-tag">📌 Page ${s.page}</span>
-                                            ${chunkBadge}
-                                            ${tableBadge}
-                                        </div>
-                                        ${s.snippet ? `
-                                            <div class="source-snippet-preview" title="Retrieved context snippet">
-                                                "${highlightedSnippet}"
-                                            </div>
-                                        ` : ''}
-                                        <div class="source-item-bottom">
-                                            <div style="display:flex; align-items:center; gap:6px;">
-                                                <span class="source-rel-tag">🎯 Relevance: ${s.relevancePct}%</span>
-                                                <span class="source-stars-badge ${bInfo.class}" style="font-size:10.5px; font-weight:600;">
-                                                    ${bInfo.stars} ${bInfo.label}
-                                                </span>
-                                            </div>
-                                            <div class="source-actions">
-                                                <a href="${s.pdfUrl}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm view-pdf-btn" title="Open original PDF at Page ${s.page}">
-                                                    <span>🔍</span> View PDF
-                                                </a>
-                                                <button class="btn-snippet-preview" data-cache-key="${s.cacheKey}" onclick="openSourcePreview('${s.cacheKey}')" title="Preview exact retrieved excerpt from Page ${s.page}">
-                                                    <span>📄</span> View Excerpt
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                `;
-                            }).join('')}
-                        </div>
-                    </div>
-                `;
-            }
         }
 
         let timingHtml = '';
@@ -2916,13 +3043,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const corrObj = answerCorrection || (evaluation ? evaluation.answer_correction : null);
         const finalAns = answerText;
         const draftAns = draftAnswer || (evaluation ? evaluation.draft_answer : answerText);
-        const correctionSectionHtml = buildAnswerCorrectionHtml(corrObj, draftAns, finalAns);
-        const structuredDataHtml = buildStructuredDataHtml(structuredData);
-        const processHtml = buildRetrievalProcessHtml(adaptiveRetrieval, compressionSummary, structuredData, userQuery, retrievalStats, evaluation ? evaluation.query_type : '');
-        const attemptsHtml = buildRetrievalAttemptsHtml(adaptiveRetrieval);
-        const compressionDetailsHtml = buildCompressionDetailsHtml(compressionSummary, compressionDetails);
-        const qualityPanelHtml = evaluation ? buildQualityPanelHtml(evaluation, userQuery) : '';
-        const savedFeedback = localStorage.getItem(`rag_feedback_${msgId}`);
 
         let statusBadge = '<span class="final-verified-badge-tag status-verified">✓ Verified</span>';
 
@@ -2954,61 +3074,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? `<span class="ai-header-tag">ANSWER</span> <span class="comparison-header-tag" title="Multi-Document Comparison Mode">🔄 Comparison</span> ${statusBadge}`
                 : `<span class="ai-header-tag">ANSWER</span> ${statusBadge}`);
 
-        let comparisonMetaHtml = '';
-        if (isComparisonMode && (documentsUsed.length > 0 || chunksUsed > 0 || (sources && sources.length > 0))) {
-            const docsCount = documentsUsed.length > 0 ? documentsUsed.length : (evaluation ? evaluation.sources_count : 0);
-            const totalChunks = chunksUsed > 0 ? chunksUsed : (evaluation ? evaluation.chunks_count : 0);
-            const sourcesCount = sources ? sources.length : 0;
-            comparisonMetaHtml = `
-                <div class="comparison-meta-row">
-                    <span class="comp-meta-item"><strong>Documents Compared:</strong> ${docsCount}</span>
-                    <span class="comp-meta-dot">•</span>
-                    <span class="comp-meta-item"><strong>Sections Used:</strong> ${totalChunks}</span>
-                    <span class="comp-meta-dot">•</span>
-                    <span class="comp-meta-item"><strong>Sources:</strong> ${sourcesCount}</span>
-                </div>
-            `;
-        }
-
-        // Build Top Answer Summary Bar (Confidence, Grounding, Verification)
-        function buildTopSummaryBar(evalObj, cObj, fallback) {
-            const conf = fallback ? 'Low' : (evalObj ? (evalObj.confidence || 'Medium') : 'Medium');
-            const ground = fallback ? 'Not Grounded' : (evalObj ? (evalObj.groundedness_label || 'Grounded') : 'Grounded');
-            const sup = evalObj ? (evalObj.supported_claims !== undefined ? evalObj.supported_claims : (cObj ? cObj.supported : 0)) : (cObj ? cObj.supported : 0);
-            const part = evalObj ? (evalObj.partial_claims !== undefined ? evalObj.partial_claims : (cObj ? cObj.partially_supported : 0)) : (cObj ? cObj.partially_supported : 0);
-            const unsup = evalObj ? (evalObj.unsupported_claims !== undefined ? evalObj.unsupported_claims : (cObj ? cObj.unsupported : 0)) : (cObj ? cObj.unsupported : 0);
-
-            let confCls = 'badge-conf-high';
-            if (conf === 'Medium') confCls = 'badge-conf-med';
-            else if (conf === 'Low') confCls = 'badge-conf-low';
-
-            let grndCls = 'badge-grounded';
-            if (ground === 'Partially Grounded') grndCls = 'badge-partially-grounded';
-            else if (ground === 'Not Grounded') grndCls = 'badge-not-grounded';
-
-            return `
-                <div class="top-answer-summary-bar">
-                    <div class="summary-meta-item">
-                        <span class="meta-item-label">CONFIDENCE</span>
-                        <span class="meta-item-badge ${confCls}">● ${escapeHtml(conf)}</span>
-                    </div>
-                    <div class="summary-meta-item">
-                        <span class="meta-item-label">GROUNDING</span>
-                        <span class="meta-item-badge ${grndCls}">${escapeHtml(ground)}</span>
-                    </div>
-                    <div class="summary-meta-item">
-                        <span class="meta-item-label">ACCURACY</span>
-                        <div class="meta-claim-pills">
-                            <span class="pill-sup">✓ ${sup} Verified</span>
-                            ${part > 0 ? `<span class="pill-part">⚠ ${part} Partial</span>` : ''}
-                            ${unsup > 0 ? `<span class="pill-unsup">✕ ${unsup} Unverified</span>` : ''}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        const topSummaryHtml = buildTopSummaryBar(evaluation, corrObj, isFallback);
+        const cleanAnswerText = stripInlineCitations(finalAns);
 
         msgDiv.innerHTML = `
             <div class="message-avatar">${isComparisonMode ? '🔄' : '🤖'}</div>
@@ -3027,52 +3093,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         </button>
                     </div>
                 </div>
-                ${comparisonMetaHtml}
 
-                <!-- 1. FINAL ANSWER -->
+                <!-- 1. FINAL ANSWER ONLY -->
                 <div class="final-verified-answer-section">
-                    <div class="ai-text-body">${renderRichMarkdown(finalAns)}</div>
-                </div>
-
-                <!-- 2. SOURCES -->
-                ${sourcesHtml}
-
-                <!-- 3. CONFIDENCE, GROUNDING & VERIFICATION SUMMARY -->
-                ${topSummaryHtml}
-
-                <!-- 4. STRUCTURED DATA & TABLES (IF APPLICABLE) -->
-                ${structuredDataHtml}
-
-                <!-- 5. RETRIEVAL PROCESS (COLLAPSIBLE) -->
-                ${processHtml}
-
-                <!-- 6. RETRIEVAL ATTEMPTS (COLLAPSIBLE) -->
-                ${attemptsHtml}
-
-                <!-- 7. CONTEXTUAL COMPRESSION (COLLAPSIBLE) -->
-                ${compressionDetailsHtml}
-
-                <!-- 8. ANSWER QUALITY & VERIFICATION (COLLAPSIBLE) -->
-                ${qualityPanelHtml}
-
-                <!-- 9. DETAILED CLAIM VERIFICATION & ANSWER CORRECTION (COLLAPSIBLE) -->
-                ${correctionSectionHtml}
-
-                <!-- 7. PERFORMANCE TIMING BAR -->
-                ${timingHtml}
-
-                <!-- 8. FEEDBACK -->
-                <div class="answer-feedback-row" data-msg-id="${msgId}">
-                    <span class="feedback-prompt">Was this answer helpful?</span>
-                    <div class="feedback-btn-group">
-                        <button type="button" class="btn-feedback btn-feedback-up ${savedFeedback === 'helpful' ? 'active' : ''}" onclick="submitAnswerFeedback('${msgId}', 'helpful', this)" title="Helpful answer">
-                            <span>👍</span> Helpful
-                        </button>
-                        <button type="button" class="btn-feedback btn-feedback-down ${savedFeedback === 'unhelpful' ? 'active' : ''}" onclick="submitAnswerFeedback('${msgId}', 'unhelpful', this)" title="Not helpful answer">
-                            <span>👎</span> Not Helpful
-                        </button>
-                    </div>
-                    <span class="feedback-status-msg hidden"></span>
+                    <div class="ai-text-body">${renderRichMarkdown(cleanAnswerText)}</div>
                 </div>
             </div>
         `;
@@ -3208,6 +3232,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    if (btnOldChat) {
+        btnOldChat.addEventListener('click', () => {
+            openOldChatModal();
+        });
+    }
+
     if (btnNewChat) {
         btnNewChat.addEventListener('click', async () => {
             await startNewChat();
@@ -3221,48 +3251,104 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function startNewChat() {
-        chatHistory = [];
-        window.currentSourceCache = {};
+        const active = (typeof getActiveSession === 'function') ? getActiveSession() : null;
+        // If current session already has conversation history, preserve it and create a fresh session
+        if (active && chatHistory && chatHistory.length > 0) {
+            saveActiveSessionState();
+
+            const newId = 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+            const count = userSessions.length + 1;
+            const newSession = {
+                id: newId,
+                title: 'New Chat ' + count,
+                preview: 'Fresh conversation workspace ready.',
+                messageCount: 0,
+                lastActive: Date.now(),
+                selected_documents: Array.from(selectedDocs),
+                history: [],
+                html: null,
+                isPinned: false
+            };
+            userSessions.unshift(newSession);
+            saveUserSessions();
+            switchSession(newId, true);
+        } else {
+            // Active session is clean/empty
+            chatHistory = [];
+            window.currentSourceCache = {};
+            if (active) {
+                active.history = [];
+                active.html = null;
+                active.messageCount = 0;
+                active.preview = 'Fresh conversation workspace ready.';
+                active.lastActive = Date.now();
+                saveUserSessions();
+            }
+        }
+
         try {
-            await fetch('/api/new_chat', { method: 'POST' });
+            await fetch('/api/new_chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: (typeof currentSessionId !== 'undefined' && currentSessionId) ? currentSessionId : 'default' })
+            });
         } catch (_) {}
 
-        showAlert('Started a new conversation session.', 'success');
+        showAlert('Started a clean conversation in this session.', 'success');
 
+        const sessionTitle = (typeof getActiveSession === 'function' && getActiveSession()) ? getActiveSession().title : 'New Chat';
         chatMessages.innerHTML = `
             <div class="message system-message" id="welcome-message">
                 <div class="message-avatar">🤖</div>
                 <div class="message-content">
-                    <h3>New Conversation Started</h3>
+                    <h3>Session: ${escapeHtml(sessionTitle)}</h3>
                     <p>Conversational memory is active. Ask questions and follow-ups across your selected documents.</p>
                 </div>
             </div>
         `;
-        userInput.value = '';
-        userInput.focus();
+        if (userInput) {
+            userInput.value = '';
+            userInput.focus();
+        }
     }
 
     async function clearChat() {
         chatHistory = [];
         window.currentSourceCache = {};
+        const active = (typeof getActiveSession === 'function') ? getActiveSession() : null;
+        if (active) {
+            active.history = [];
+            active.html = null;
+            active.messageCount = 0;
+            active.preview = 'Conversation cleared.';
+            active.lastActive = Date.now();
+            if (typeof saveUserSessions === 'function') saveUserSessions();
+            if (typeof renderSessionsPage === 'function' && currentActiveView === 'sessions') renderSessionsPage();
+        }
         try {
-            await fetch('/api/clear_chat', { method: 'POST' });
+            await fetch('/api/clear_chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: (typeof currentSessionId !== 'undefined' && currentSessionId) ? currentSessionId : 'default' })
+            });
         } catch (_) {}
 
-        showAlert('Conversation cleared.', 'info');
+        showAlert('Conversation cleared for this session.', 'info');
 
+        const sessionTitle = active ? active.title : 'Default Session';
         chatMessages.innerHTML = `
             <div class="message system-message" id="welcome-message">
                 <div class="message-avatar">🤖</div>
                 <div class="message-content">
-                    <h3>Conversation cleared.</h3>
-                    <p>Ask a new question strictly answered using your selected documents.</p>
+                    <h3>Session: ${escapeHtml(sessionTitle)}</h3>
+                    <p>Conversation cleared. Ask a new question strictly answered using your selected documents.</p>
                 </div>
             </div>
         `;
         userInput.value = '';
         userInput.focus();
     }
+
 
     // =========================================================================
     // 8. SYSTEM STATUS SYNC & DOCUMENT LIST RENDERING
@@ -3283,10 +3369,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
             allDocumentsList = data.documents || [];
 
-            // On initial load, select all documents by default
+            // On initial load, restore session selection if present, else select all documents
             if (!initialSelectionLoaded && allDocumentsList.length > 0) {
-                allDocumentsList.forEach(d => selectedDocs.add(d.filename));
+                const active = (typeof getActiveSession === 'function') ? getActiveSession() : null;
+                const availableFiles = new Set(allDocumentsList.map(d => d.filename));
+                if (active && Array.isArray(active.selected_documents) && active.selected_documents.length > 0) {
+                    const validDocs = active.selected_documents.filter(fn => availableFiles.has(fn));
+                    if (validDocs.length > 0) {
+                        selectedDocs = new Set(validDocs);
+                    } else {
+                        allDocumentsList.forEach(d => selectedDocs.add(d.filename));
+                    }
+                } else {
+                    allDocumentsList.forEach(d => selectedDocs.add(d.filename));
+                }
                 initialSelectionLoaded = true;
+                if (active && active.html && chatMessages && active.history && active.history.length > 0) {
+                    chatMessages.innerHTML = active.html;
+                    chatHistory = JSON.parse(JSON.stringify(active.history));
+                }
             } else if (allDocumentsList.length === 0) {
                 selectedDocs.clear();
                 initialSelectionLoaded = false;
@@ -3301,6 +3402,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             renderFileList(allDocumentsList);
+            updateAllDocumentCounts(data);
             updateSelectionUI();
 
             // Update Pipeline Status Pills with actual system state
@@ -3369,7 +3471,7 @@ document.addEventListener('DOMContentLoaded', () => {
         fileCountBadge.textContent = `${documents.length} document${documents.length === 1 ? '' : 's'}`;
 
         if (!documents || documents.length === 0) {
-            fileList.innerHTML = '<li class="empty-list-item">No documents uploaded yet.</li>';
+            fileList.innerHTML = '<li class="empty-list-item">No documents uploaded yet. Upload your PDF files to get started.</li>';
             return;
         }
 
@@ -3462,12 +3564,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // =========================================================================
-    // 9. MARKDOWN & STRUCTURED RESPONSE RENDERER
+    // 9. MARKDOWN & STRUCTURED RESPONSE RENDERER (ANSWER-ONLY MODE)
     // =========================================================================
+    function stripInlineCitations(rawText) {
+        if (!rawText) return '';
+        let text = String(rawText);
+        // Strip [Document.pdf — Page 1], [Document.pdf, Page 1], [Document.pdf - Page 1], [Document.pdf], etc.
+        text = text.replace(/\[\s*([a-zA-Z0-9_\-\.\s]+?\.pdf)\s*(?:—|–|-|,)?\s*(?:Page|pg\.?|p\.?)?\s*\d*(?:,\s*(?:Table|tbl\.?)\s*\d+)?\s*\]/gi, '');
+        text = text.replace(/\[\s*Document:\s*[^\]]+?\.pdf\s*\|\s*Page:?\s*\d+\s*\]/gi, '');
+        text = text.replace(/\[\s*([a-zA-Z0-9_\-\s]+?)\s*(?:—|–|-|,)\s*(?:Page|pg\.?|p\.?)\s*\d+(?:,\s*(?:Table|tbl\.?)\s*\d+)?\s*\]/gi, '');
+        text = text.replace(/\[\s*([a-zA-Z0-9_\-\.\s]+?\.pdf)\s*\]/gi, '');
+        // Clean trailing punctuation artifacts and spaces before punctuation
+        text = text.replace(/\s+([.,;:!?])/g, '$1');
+        text = text.replace(/[ \t]{2,}/g, ' ');
+        text = text.replace(/\n{3,}/g, '\n\n');
+        return text.trim();
+    }
+    window.stripInlineCitations = stripInlineCitations;
+
     function renderRichMarkdown(rawText) {
         if (!rawText) return '';
 
-        let text = String(rawText);
+        let text = stripInlineCitations(rawText);
 
         // 1. Code Blocks (```language ... ```)
         text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
@@ -3514,6 +3632,15 @@ document.addEventListener('DOMContentLoaded', () => {
             return tableHtml;
         });
 
+        // Consolidate numbered list items separated by blank lines into a single list block
+        while (/(^|\n)(\s*\d+\.\s[^\n]+)\n{2,}(\s*\d+\.\s)/.test(text)) {
+            text = text.replace(/(^|\n)(\s*\d+\.\s[^\n]+)\n{2,}(\s*\d+\.\s)/g, '$1$2\n$3');
+        }
+        // Consolidate bullet list items separated by blank lines into a single list block
+        while (/(^|\n)(\s*[-*•]\s[^\n]+)\n{2,}(\s*[-*•]\s)/.test(text)) {
+            text = text.replace(/(^|\n)(\s*[-*•]\s[^\n]+)\n{2,}(\s*[-*•]\s)/g, '$1$2\n$3');
+        }
+
         // 3. Process remaining lines for lists, headers, paragraphs
         const paragraphs = text.split('\n\n');
         return paragraphs.map(para => {
@@ -3534,6 +3661,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (para.startsWith('# ')) {
                 return `<h2>${renderInlineMarkdown(para.substring(2))}</h2>`;
             }
+            if (/^(\*\*)?ADDITIONAL INFORMATION(\*\*)?:?$/i.test(para.trim())) {
+                return `<h4>ADDITIONAL INFORMATION</h4>`;
+            }
+            if (/^(\*\*)?ADDITIONAL INFORMATION(\*\*)?:?\n/i.test(para.trim())) {
+                const subLines = para.trim().split('\n');
+                const rest = subLines.slice(1).join('\n');
+                return `<h4>ADDITIONAL INFORMATION</h4>` + renderRichMarkdown(rest);
+            }
 
             // Bullet Lists
             const lines = para.split('\n');
@@ -3550,8 +3685,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const isNumberedList = lines.every(l => /^\d+\.\s/.test(l.trim()));
             if (isNumberedList) {
                 const listItems = lines.map(l => {
-                    const cleanText = l.trim().replace(/^\d+\.\s+/, '');
-                    return `<li>${renderInlineMarkdown(cleanText)}</li>`;
+                    const match = l.trim().match(/^(\d+)\.\s+(.*)/s);
+                    const itemNum = match ? match[1] : '';
+                    const cleanText = match ? match[2] : l.trim().replace(/^\d+\.\s+/, '');
+                    return `<li value="${itemNum}">${renderInlineMarkdown(cleanText)}</li>`;
                 }).join('');
                 return `<ol>${listItems}</ol>`;
             }
@@ -3573,22 +3710,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // Inline code (`code`)
         s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-        // Clickable Citations (e.g. [Document.pdf — Page 4] or [Document.pdf, Page 4] or [Document.pdf - Page 4] or [Document.pdf — Page 4, Table 1])
-        s = s.replace(/\[([a-zA-Z0-9_\-\.\s]+?\.pdf)\s*(?:—|–|-|,)\s*(?:Page|pg\.?|p\.?)\s*(\d+)(?:,\s*(?:Table|tbl\.?)\s*(\d+))?\]/gi, (fullMatch, doc, page, table) => {
-            const tableParam = table ? `'${table}'` : "''";
-            const tableLabel = table ? `, Table ${table}` : '';
-            const cleanDoc = doc.trim();
-            return `<button type="button" class="citation-ref-btn" onclick="window.openEvidenceViewerFromCitation('${escapeHtml(cleanDoc)}', ${parseInt(page, 10)}, ${tableParam}, this)" title="Click to view exact retrieved evidence from ${escapeHtml(cleanDoc)} Page ${page}"><span class="cit-icon">📎</span><span class="cit-text">[${escapeHtml(cleanDoc)} — Page ${page}${tableLabel}]</span></button>`;
-        });
-
-        // Also match general citations without .pdf extension if it matches document names or "Page X"
-        s = s.replace(/\[([a-zA-Z0-9_\-\s]+?)\s*(?:—|–|-|,)\s*(?:Page|pg\.?|p\.?)\s*(\d+)(?:,\s*(?:Table|tbl\.?)\s*(\d+))?\]/gi, (fullMatch, doc, page, table) => {
-            if (fullMatch.includes('citation-ref-btn')) return fullMatch;
-            const tableParam = table ? `'${table}'` : "''";
-            const tableLabel = table ? `, Table ${table}` : '';
-            const cleanDoc = doc.trim();
-            return `<button type="button" class="citation-ref-btn" onclick="window.openEvidenceViewerFromCitation('${escapeHtml(cleanDoc)}', ${parseInt(page, 10)}, ${tableParam}, this)" title="Click to view exact retrieved evidence from ${escapeHtml(cleanDoc)} Page ${page}"><span class="cit-icon">📎</span><span class="cit-text">[${escapeHtml(cleanDoc)} — Page ${page}${tableLabel}]</span></button>`;
-        });
+        // Strip inline citations from normal text
+        s = s.replace(/\[\s*([a-zA-Z0-9_\-\.\s]+?\.pdf)\s*(?:—|–|-|,)?\s*(?:Page|pg\.?|p\.?)?\s*\d*(?:,\s*(?:Table|tbl\.?)\s*\d+)?\s*\]/gi, '');
+        s = s.replace(/\[\s*([a-zA-Z0-9_\-\s]+?)\s*(?:—|–|-|,)\s*(?:Page|pg\.?|p\.?)\s*\d+(?:,\s*(?:Table|tbl\.?)\s*\d+)?\s*\]/gi, '');
+        s = s.replace(/\[\s*([a-zA-Z0-9_\-\.\s]+?\.pdf)\s*\]/gi, '');
+        s = s.replace(/\s+([.,;:!?])/g, '$1');
+        s = s.replace(/[ \t]{2,}/g, ' ');
 
         return s;
     }
@@ -3908,39 +4035,46 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function toggleViewMode() {
-        if (isAnalyticsViewActive) {
-            openChatView();
+        if (typeof navigateToView === 'function') {
+            if (currentActiveView === 'analytics') {
+                navigateToView('chat', true);
+            } else {
+                navigateToView('analytics', true);
+            }
         } else {
-            openAnalyticsView();
+            if (isAnalyticsViewActive) {
+                openChatView();
+            } else {
+                openAnalyticsView();
+            }
         }
     }
 
     function openAnalyticsView() {
-        isAnalyticsViewActive = true;
-        if (chatViewSection) chatViewSection.classList.add('hidden');
-        if (analyticsViewSection) analyticsViewSection.classList.remove('hidden');
-
-        if (mainHeaderTitle) mainHeaderTitle.textContent = '📊 RAG Analytics & Evaluation Dashboard';
-        if (mainHeaderSubtitle) mainHeaderSubtitle.textContent = 'Real-time telemetry, grounding evaluation, faithfulness & question audit log';
-
-        if (toggleViewIcon) toggleViewIcon.textContent = '💬';
-        if (toggleViewText) toggleViewText.textContent = 'Chat View';
-        if (btnToggleView) btnToggleView.classList.add('active');
-
-        fetchAndRenderAnalytics();
+        if (typeof navigateToView === 'function') {
+            navigateToView('analytics', true);
+        } else {
+            isAnalyticsViewActive = true;
+            if (chatViewSection) chatViewSection.classList.add('hidden');
+            if (analyticsViewSection) analyticsViewSection.classList.remove('hidden');
+            if (toggleViewIcon) toggleViewIcon.textContent = '💬';
+            if (toggleViewText) toggleViewText.textContent = 'Chat View';
+            if (btnToggleView) btnToggleView.classList.add('active');
+            fetchAndRenderAnalytics();
+        }
     }
 
     function openChatView() {
-        isAnalyticsViewActive = false;
-        if (analyticsViewSection) analyticsViewSection.classList.add('hidden');
-        if (chatViewSection) chatViewSection.classList.remove('hidden');
-
-        if (mainHeaderTitle) mainHeaderTitle.textContent = 'RAG Document Assistant';
-        if (mainHeaderSubtitle) mainHeaderSubtitle.textContent = 'Multi-document search, smart filtering & conversational follow-ups';
-
-        if (toggleViewIcon) toggleViewIcon.textContent = '📊';
-        if (toggleViewText) toggleViewText.textContent = 'Analytics';
-        if (btnToggleView) btnToggleView.classList.remove('active');
+        if (typeof navigateToView === 'function') {
+            navigateToView('chat', true);
+        } else {
+            isAnalyticsViewActive = false;
+            if (analyticsViewSection) analyticsViewSection.classList.add('hidden');
+            if (chatViewSection) chatViewSection.classList.remove('hidden');
+            if (toggleViewIcon) toggleViewIcon.textContent = '📊';
+            if (toggleViewText) toggleViewText.textContent = 'Analytics';
+            if (btnToggleView) btnToggleView.classList.remove('active');
+        }
     }
 
     async function fetchAndRenderAnalytics(showToast = false) {
@@ -5112,13 +5246,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const pipelineModal = document.getElementById('pipeline-details-modal');
     const pipelineModalBackdrop = document.getElementById('pipeline-modal-backdrop');
     const btnClosePipelineModal = document.getElementById('btn-close-pipeline-modal');
-    const btnClosePipelineModalBtn = document.getElementById('btn-close-pipeline-modal-btn');
+    const btnClosePipelineModalBtn = document.getElementById('btn-close-pipeline-bottom') || document.getElementById('btn-close-pipeline-modal-btn');
 
-    // Scope & meta elements
-    const navBadgeDocs = document.getElementById('nav-badge-docs');
-    const sidebarMetaDocs = document.getElementById('sidebar-meta-docs');
-    const sidebarMetaChunks = document.getElementById('sidebar-meta-chunks');
-    const chatScopeDocText = document.getElementById('chat-scope-doc-text');
+    // Scope & meta elements (navBadgeDocs, sidebarMetaDocs, sidebarMetaChunks, chatScopeDocText initialized at top)
     const dashStatDocs = document.getElementById('dash-stat-docs');
     const dashStatChunks = document.getElementById('dash-stat-chunks');
     const dashStatFaithfulness = document.getElementById('dash-stat-faithfulness');
@@ -5181,20 +5311,31 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // Ensure inner sections for chat / analytics are properly unhidden
-        if (viewId === 'chat' && chatViewSection) {
-            chatViewSection.classList.remove('hidden');
-        }
-        if (viewId === 'analytics' && analyticsViewSection) {
-            analyticsViewSection.classList.remove('hidden');
+        if (viewId === 'chat') {
+            if (chatViewSection) chatViewSection.classList.remove('hidden');
+            if (analyticsViewSection) analyticsViewSection.classList.add('hidden');
+            if (btnToggleView) btnToggleView.classList.remove('active');
+            if (toggleViewIcon) toggleViewIcon.textContent = '📊';
+            if (toggleViewText) toggleViewText.textContent = 'Analytics';
+            isAnalyticsViewActive = false;
+        } else if (viewId === 'analytics') {
+            if (analyticsViewSection) analyticsViewSection.classList.remove('hidden');
+            if (chatViewSection) chatViewSection.classList.add('hidden');
+            if (btnToggleView) btnToggleView.classList.add('active');
+            if (toggleViewIcon) toggleViewIcon.textContent = '💬';
+            if (toggleViewText) toggleViewText.textContent = 'Chat View';
+            isAnalyticsViewActive = true;
         }
 
         // 2. Update navigation active state
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(link => {
-            const targetView = link.getAttribute('data-view');
+            const targetView = link.getAttribute('data-view') || (link.getAttribute('href') || '').replace(/^#\/?/, '');
             if (targetView === viewId) {
                 link.classList.add('active');
+                link.setAttribute('aria-current', 'page');
             } else {
                 link.classList.remove('active');
+                link.removeAttribute('aria-current');
             }
         });
 
@@ -5217,6 +5358,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (viewId === 'chat') {
             updateChatScopeBadge();
             if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+            if (userInput) setTimeout(() => userInput.focus(), 100);
         } else if (viewId === 'sessions') {
             if (typeof renderSessionsPage === 'function') renderSessionsPage();
         } else if (viewId === 'history') {
@@ -5236,6 +5378,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     window.navigateToView = navigateToView;
+
+    // Attach click listeners to all sidebar navigation links and data-view buttons
+    document.querySelectorAll('.sidebar-nav .nav-item, [data-view]').forEach(item => {
+        item.addEventListener('click', (e) => {
+            const targetView = item.getAttribute('data-view') || (item.getAttribute('href') || '').replace(/^#\/?/, '');
+            if (targetView && VALID_VIEWS.includes(targetView)) {
+                e.preventDefault();
+                navigateToView(targetView, true);
+            }
+        });
+    });
+
+    // Listen to hashchange events for browser history / back / forward / hash navigation
+    window.addEventListener('hashchange', () => {
+        const hash = window.location.hash.replace(/^#\/?/, '').trim();
+        if (hash && VALID_VIEWS.includes(hash)) {
+            if (currentActiveView !== hash) {
+                navigateToView(hash, false);
+            }
+        }
+    });
+
+    // Topbar Navigation Buttons
+    const btnTopbarDocs = document.getElementById('btn-topbar-docs');
+    const btnTopbarChat = document.getElementById('btn-topbar-chat');
+    if (btnTopbarDocs) {
+        btnTopbarDocs.addEventListener('click', (e) => {
+            e.preventDefault();
+            navigateToView('documents', true);
+        });
+    }
+    if (btnTopbarChat) {
+        btnTopbarChat.addEventListener('click', (e) => {
+            e.preventDefault();
+            navigateToView('chat', true);
+        });
+    }
 
     // Sidebar Collapsing
     function setSidebarCollapsed(collapsed, save = true) {
@@ -5309,10 +5488,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnClosePipelineModalBtn) btnClosePipelineModalBtn.addEventListener('click', closePipelineModal);
     if (pipelineModalBackdrop) pipelineModalBackdrop.addEventListener('click', closePipelineModal);
 
-    // Dashboard Elements
-    const dashMetricDocs = document.getElementById('dash-metric-docs');
-    const dashMetricChunks = document.getElementById('dash-metric-chunks');
-    const dashMetricPagesSub = document.getElementById('dash-metric-pages-sub');
+    // Dashboard Elements (dashMetricDocs, dashMetricChunks, dashMetricPagesSub initialized at top)
     const dashMetricQuestions = document.getElementById('dash-metric-questions');
     const dashDocListPreview = document.getElementById('dash-doc-list-preview');
 
@@ -5381,24 +5557,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Chat Scope & Navigation Badges
     function updateChatScopeBadge() {
-        if (!chatScopeDocText) return;
-        const total = allDocumentsList.length;
-        const selected = selectedDocs.size;
-        if (total === 0) {
-            chatScopeDocText.textContent = 'No documents uploaded';
-        } else if (selected === total) {
-            chatScopeDocText.textContent = `All Documents Active (${total} docs)`;
-        } else if (selected === 0) {
-            chatScopeDocText.textContent = '0 Documents Selected (Check in Documents page)';
-        } else {
-            chatScopeDocText.textContent = `${selected} of ${total} documents selected`;
-        }
-
-        // Also update sidebar badges
-        if (navBadgeDocs) navBadgeDocs.textContent = total;
-        if (sidebarMetaDocs) sidebarMetaDocs.textContent = `${total} Docs`;
-        const totalChunks = allDocumentsList.reduce((acc, d) => acc + (d.chunks || 0), 0);
-        if (sidebarMetaChunks) sidebarMetaChunks.textContent = `${totalChunks} Sections`;
+        updateAllDocumentCounts();
     }
 
     // Dashboard Quick Actions
@@ -5419,307 +5578,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // =========================================================================
-    // MULTI-SESSION CHAT SUPPORT
+    // MULTI-SESSION CHAT & PERSISTENCE WORKSPACE IMPLEMENTATION
     // =========================================================================
-    const sessionsMemory = {
-        'default': { history: [], html: null },
-        'dbms_prep': { history: [], html: null },
-        'sgcube_research': { history: [], html: null },
-        'sql_revision': { history: [], html: null }
-    };
-    let currentSessionKey = 'default';
-
-    const chatSessionSelect = document.getElementById('chat-session-select');
-    if (chatSessionSelect) {
-        chatSessionSelect.addEventListener('change', (e) => {
-            const newSessionKey = e.target.value;
-            if (newSessionKey === currentSessionKey) return;
-
-            // Save active session
-            if (sessionsMemory[currentSessionKey]) {
-                sessionsMemory[currentSessionKey].history = [...chatHistory];
-                sessionsMemory[currentSessionKey].html = chatMessages ? chatMessages.innerHTML : null;
-            }
-
-            // Switch to new session
-            currentSessionKey = newSessionKey;
-            const target = sessionsMemory[currentSessionKey] || { history: [], html: null };
-            chatHistory = target.history ? [...target.history] : [];
-
-            if (chatMessages) {
-                if (target.html) {
-                    chatMessages.innerHTML = target.html;
-                } else {
-                    const sessionName = e.target.options[e.target.selectedIndex].text;
-                    chatMessages.innerHTML = `
-                        <div class="message system-message" id="welcome-message">
-                            <div class="message-avatar">🤖</div>
-                            <div class="message-content">
-                                <h3>Session: ${escapeHtml(sessionName)}</h3>
-                                <p>This is a separate conversation workspace. Ask questions grounded in your selected documents.</p>
-                            </div>
-                        </div>
-                    `;
-                }
-            }
-
-            showAlert(`Switched to session: ${e.target.options[e.target.selectedIndex].text}`, 'info');
-        });
-    }
-
-    // =========================================================================
-    // HISTORY PAGE WORKSPACE LOGIC
-    // =========================================================================
-    const historyCountBadge = document.getElementById('history-count-badge');
-    const historyFilterInput = document.getElementById('history-filter-input');
-
-    function renderHistoryPage() {
-        const questions = (typeof getRecentQuestions === 'function') ? getRecentQuestions() : [];
-        if (historyCountBadge) {
-            historyCountBadge.textContent = `${questions.length} quer${questions.length === 1 ? 'y' : 'ies'} recorded`;
-        }
-
-        const listEl = document.getElementById('recent-questions-list');
-        if (!listEl) return;
-
-        const filterVal = historyFilterInput ? historyFilterInput.value.trim().toLowerCase() : '';
-        const filtered = filterVal
-            ? questions.filter(q => q.toLowerCase().includes(filterVal))
-            : questions;
-
-        if (filtered.length === 0) {
-            listEl.innerHTML = `
-                <li class="empty-recent-item" style="padding:20px; text-align:center; color:var(--text-muted);">
-                    ${filterVal ? 'No history matching "' + escapeHtml(filterVal) + '"' : 'No queries recorded yet. Questions asked in Chat will appear here.'}
-                </li>
-            `;
-            return;
-        }
-
-        listEl.innerHTML = filtered.map((q, idx) => {
-            const safeQ = escapeHtml(q);
-            const escapedForAttr = safeQ.replace(/'/g, "\\'");
-            return `
-                <li class="history-item-row" style="display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid rgba(255,255,255,0.06); gap:14px;">
-                    <div style="display:flex; align-items:center; gap:12px; overflow:hidden; flex:1;">
-                        <span style="font-size:16px;">💬</span>
-                        <span class="history-q-text" style="font-weight:500; color:var(--text-primary); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${safeQ}">
-                            ${safeQ}
-                        </span>
-                    </div>
-                    <div style="display:flex; gap:8px; flex-shrink:0;">
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="askHistoryQuestionInChat('${escapedForAttr}')" title="Ask this question in Chat">
-                            <span>💬</span> Ask in Chat
-                        </button>
-                        <button type="button" class="btn btn-ghost btn-sm" onclick="searchHistoryQuestionInSearch('${escapedForAttr}')" title="Search chunks for this query">
-                            <span>🔍</span> Search Chunks
-                        </button>
-                    </div>
-                </li>
-            `;
-        }).join('');
-    }
-
-    window.askHistoryQuestionInChat = function(queryText) {
-        navigateToView('chat');
-        if (userInput) {
-            userInput.value = queryText;
-            userInput.focus();
-        }
-    };
-
-    window.searchHistoryQuestionInSearch = function(queryText) {
-        navigateToView('search');
-        if (docSearchInput) {
-            docSearchInput.value = queryText;
-            performDocumentSearch(queryText);
-        }
-    };
-
-    if (historyFilterInput) {
-        historyFilterInput.addEventListener('input', () => {
-            renderHistoryPage();
-        });
-    }
-
-    // Setup Nav Item click listeners
-    document.querySelectorAll('.sidebar-nav .nav-item').forEach(link => {
-        link.addEventListener('click', (e) => {
-            e.preventDefault();
-            const viewId = link.getAttribute('data-view');
-            navigateToView(viewId, true);
-        });
-    });
-
-    // Hash change event listener
-    window.addEventListener('hashchange', () => {
-        const hash = window.location.hash.replace('#', '');
-        if (VALID_VIEWS.includes(hash) && hash !== currentActiveView) {
-            navigateToView(hash, false);
-        }
-    });
-
-    // Hook existing openAnalyticsView & openChatView into navigateToView
-    openAnalyticsView = function() {
-        navigateToView('analytics', true);
-    };
-
-    openChatView = function() {
-        navigateToView('chat', true);
-    };
-
-    // Hook updateSelectionUI to also refresh navigation badges & chat scope
-    const origUpdateSelectionUI = updateSelectionUI;
-    updateSelectionUI = function() {
-        origUpdateSelectionUI();
-        updateChatScopeBadge();
-        renderDashboardSummary();
-    };
-    // (Initial Route Detection moved to end of setup)
-
-    // =========================================================================
-    // DUAL-THEME SWITCHER & CIRCULAR VIEW TRANSITION
-    // =========================================================================
-    const btnThemeToggle = document.getElementById('btn-theme-toggle');
-    const themeToggleIcon = document.getElementById('theme-toggle-icon');
-    const themeToggleLabel = document.getElementById('theme-toggle-label');
-    const themeTransitionOverlay = document.getElementById('theme-transition-overlay');
-
-    function getCurrentTheme() {
-        return document.documentElement.getAttribute('data-theme') || 'light';
-    }
-
-    function updateThemeToggleUI(theme) {
-        if (!themeToggleIcon || !themeToggleLabel) return;
-        if (theme === 'dark') {
-            themeToggleIcon.textContent = '☀️';
-            themeToggleLabel.textContent = 'Light';
-            if (btnThemeToggle) {
-                btnThemeToggle.setAttribute('aria-label', 'Switch to Light Theme');
-                btnThemeToggle.setAttribute('title', 'Switch to Light Theme (Current: Dark)');
-            }
-        } else {
-            themeToggleIcon.textContent = '🌙';
-            themeToggleLabel.textContent = 'Dark';
-            if (btnThemeToggle) {
-                btnThemeToggle.setAttribute('aria-label', 'Switch to Dark Theme');
-                btnThemeToggle.setAttribute('title', 'Switch to Dark Theme (Current: Light)');
-            }
-        }
-    }
-
-    function applyThemeDirect(theme) {
-        document.documentElement.setAttribute('data-theme', theme);
-        try {
-            localStorage.setItem('rag_theme', theme);
-        } catch (_) {}
-        updateThemeToggleUI(theme);
-    }
-
-    function toggleTheme(event) {
-        const currentTheme = getCurrentTheme();
-        const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
-        const isReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-        // 1. If reduced motion requested, switch with simple fade without radial animation
-        if (isReducedMotion) {
-            applyThemeDirect(nextTheme);
-            return;
-        }
-
-        // 2. Determine animation origin coordinates
-        let x, y;
-        if (event && typeof event.clientX === 'number' && typeof event.clientY === 'number' && event.clientX > 0 && event.clientY > 0) {
-            x = event.clientX;
-            y = event.clientY;
-        } else if (btnThemeToggle) {
-            const rect = btnThemeToggle.getBoundingClientRect();
-            x = rect.left + rect.width / 2;
-            y = rect.top + rect.height / 2;
-        } else {
-            x = window.innerWidth - 60;
-            y = 32;
-        }
-
-        // Maximum distance to viewport corners
-        const endRadius = Math.hypot(
-            Math.max(x, window.innerWidth - x),
-            Math.max(y, window.innerHeight - y)
-        );
-
-        // 3. Modern Chrome View Transitions API (GPU composited 60fps radial expansion)
-        if (typeof document.startViewTransition === 'function') {
-            const transition = document.startViewTransition(() => {
-                applyThemeDirect(nextTheme);
-            });
-
-            transition.ready.then(() => {
-                const clipPath = [
-                    `circle(0px at ${x}px ${y}px)`,
-                    `circle(${endRadius}px at ${x}px ${y}px)`
-                ];
-                document.documentElement.animate(
-                    {
-                        clipPath: clipPath
-                    },
-                    {
-                        duration: 550,
-                        easing: 'cubic-bezier(0.25, 1, 0.5, 1)',
-                        pseudoElement: '::view-transition-new(root)'
-                    }
-                );
-            }).catch(() => {
-                // In case of transition abort, theme is already set
-            });
-            return;
-        }
-
-        // 4. Elegant Fallback Overlay for browsers without View Transitions
-        if (themeTransitionOverlay) {
-            themeTransitionOverlay.style.background = nextTheme === 'dark' ? '#23262F' : '#FFFFFF';
-            themeTransitionOverlay.style.clipPath = `circle(0px at ${x}px ${y}px)`;
-            themeTransitionOverlay.classList.add('animating');
-
-            requestAnimationFrame(() => {
-                themeTransitionOverlay.style.clipPath = `circle(${endRadius}px at ${x}px ${y}px)`;
-                setTimeout(() => {
-                    applyThemeDirect(nextTheme);
-                    themeTransitionOverlay.classList.remove('animating');
-                    themeTransitionOverlay.style.clipPath = `circle(0px at ${x}px ${y}px)`;
-                }, 500);
-            });
-            return;
-        }
-
-        // Default instant apply
-        applyThemeDirect(nextTheme);
-    }
-    window.toggleTheme = toggleTheme;
-
-    // Attach listeners
-    if (btnThemeToggle) {
-        btnThemeToggle.addEventListener('click', (e) => {
-            toggleTheme(e);
-        });
-
-        btnThemeToggle.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                toggleTheme(e);
-            }
-        });
-    }
-
-    // Initialize toggle UI based on current active theme
-    updateThemeToggleUI(getCurrentTheme());
-
-    // =========================================================================
-    // SESSIONS WORKSPACE IMPLEMENTATION (BROWSER-SAVED SESSION STORAGE)
-    // =========================================================================
-    const SESSIONS_STORAGE_KEY = 'rag_user_sessions_v1';
+    const SESSIONS_STORAGE_KEY = 'rag_user_sessions_v2';
     let userSessions = [];
+    let currentSessionId = 'default';
     let sessionToRenameId = null;
     let sessionToDeleteId = null;
+
+    const chatSessionSelect = document.getElementById('chat-session-select');
 
     function initUserSessions() {
         try {
@@ -5732,56 +5599,438 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (!userSessions || !Array.isArray(userSessions) || userSessions.length === 0) {
-            // Seed initial sessions
             userSessions = [
                 {
                     id: 'default',
                     title: 'Default Session',
                     preview: 'General questions and overview of your document library.',
-                    messageCount: 1,
-                    lastActive: Date.now() - 300000,
-                    docCount: (typeof allDocumentsList !== 'undefined') ? allDocumentsList.length : 1,
+                    messageCount: 0,
+                    lastActive: Date.now(),
+                    selected_documents: [],
+                    history: [],
+                    html: null,
                     isPinned: true
-                },
-                {
-                    id: 'dbms_prep',
-                    title: 'DBMS Preparation',
-                    preview: 'Primary keys, candidate keys, normalization and ACID properties.',
-                    messageCount: 12,
-                    lastActive: Date.now() - 600000,
-                    docCount: 1,
-                    isPinned: false
-                },
-                {
-                    id: 'sgcube_research',
-                    title: 'SG CUBE Research',
-                    preview: 'Edge-hybrid dual-mode architecture and computer vision pipeline.',
-                    messageCount: 6,
-                    lastActive: Date.now() - 3600000,
-                    docCount: 1,
-                    isPinned: false
-                },
-                {
-                    id: 'sql_revision',
-                    title: 'SQL Revision',
-                    preview: 'DDL, DML commands, indexing, and relational JOIN operations.',
-                    messageCount: 4,
-                    lastActive: Date.now() - 86400000,
-                    docCount: 1,
-                    isPinned: false
                 }
             ];
             saveUserSessions();
         }
+
+        // Validate active session ID (restore from localStorage if present)
+        try {
+            const savedActiveId = localStorage.getItem('rag_active_session_id_v2');
+            if (savedActiveId && userSessions.some(s => s.id === savedActiveId)) {
+                currentSessionId = savedActiveId;
+            }
+        } catch (_) {}
+
+        if (!userSessions.some(s => s.id === currentSessionId)) {
+            currentSessionId = userSessions[0].id;
+        }
+
+        populateSessionDropdown();
     }
 
     function saveUserSessions() {
         try {
             localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(userSessions));
         } catch (e) {
-            console.warn('Failed to persist sessions:', e);
+            console.warn('Failed to persist sessions to localStorage:', e);
         }
     }
+
+    function getActiveSession() {
+        if (!userSessions || userSessions.length === 0) return null;
+        return userSessions.find(s => s.id === currentSessionId) || userSessions[0];
+    }
+    window.getActiveSession = getActiveSession;
+
+    function saveActiveSessionState() {
+        const active = getActiveSession();
+        if (!active) return;
+
+        active.history = Array.isArray(chatHistory) ? JSON.parse(JSON.stringify(chatHistory)) : [];
+        active.html = chatMessages ? chatMessages.innerHTML : null;
+        active.selected_documents = Array.from(selectedDocs);
+        active.messageCount = active.history ? active.history.filter(m => m.role === 'user').length : 0;
+        active.lastActive = Date.now();
+
+        if (active.history && active.history.length > 0) {
+            const firstUserMsg = active.history.find(m => m.role === 'user');
+            if (firstUserMsg && firstUserMsg.content) {
+                active.firstQuestion = firstUserMsg.content;
+                // Auto-name if using default generic title
+                if (!active.customTitle && (
+                    active.title === 'Default Session' ||
+                    active.title.startsWith('New Chat') ||
+                    active.title.startsWith('New Conversation') ||
+                    !active.title
+                )) {
+                    const clean = firstUserMsg.content.trim().slice(0, 45);
+                    active.title = clean.length < firstUserMsg.content.trim().length ? clean + '...' : clean;
+                }
+            }
+            const lastUserMsg = [...active.history].reverse().find(m => m.role === 'user');
+            if (lastUserMsg && lastUserMsg.content) {
+                active.preview = lastUserMsg.content;
+            }
+        }
+
+        saveUserSessions();
+        try {
+            localStorage.setItem('rag_active_session_id_v2', currentSessionId);
+        } catch (_) {}
+    }
+    window.saveActiveSessionState = saveActiveSessionState;
+
+    function switchSession(targetSessionId, skipSaveCurrent = false) {
+        if (!targetSessionId) return;
+
+        // 1. Save currently active session if switching away from it
+        if (!skipSaveCurrent && currentSessionId && currentSessionId !== targetSessionId && Array.isArray(chatHistory) && chatHistory.length > 0) {
+            saveActiveSessionState();
+        }
+
+        // 2. Find target session
+        const target = userSessions.find(s => s.id === targetSessionId) || userSessions[0];
+        if (!target) return;
+
+        currentSessionId = target.id;
+
+        // 3. Restore chatHistory isolated to this session
+        chatHistory = target.history ? JSON.parse(JSON.stringify(target.history)) : [];
+        window.currentSourceCache = {};
+
+        // 4. Restore document selection per session
+        if (target.selected_documents && Array.isArray(target.selected_documents) && target.selected_documents.length > 0) {
+            const availableFiles = new Set(allDocumentsList.map(d => d.filename));
+            // Prune deleted documents
+            target.selected_documents = target.selected_documents.filter(fn => availableFiles.has(fn));
+            selectedDocs = new Set(target.selected_documents);
+        } else if (allDocumentsList.length > 0 && selectedDocs.size === 0) {
+            // Default selection: all available documents
+            allDocumentsList.forEach(d => selectedDocs.add(d.filename));
+        }
+        updateSelectionUI();
+
+        // 5. Restore chat messages DOM
+        if (chatMessages) {
+            if (target.html && target.history && target.history.length > 0) {
+                chatMessages.innerHTML = target.html;
+            } else {
+                chatMessages.innerHTML = `
+                    <div class="message system-message" id="welcome-message">
+                        <div class="message-avatar">🤖</div>
+                        <div class="message-content">
+                            <h3>Session: ${escapeHtml(target.title)}</h3>
+                            <p>This is a separate conversation workspace. Ask questions grounded in your selected documents.</p>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // 6. Synchronize dropdown
+        populateSessionDropdown();
+        if (chatSessionSelect) {
+            chatSessionSelect.value = currentSessionId;
+        }
+
+        target.lastActive = Date.now();
+        saveUserSessions();
+        try {
+            localStorage.setItem('rag_active_session_id_v2', currentSessionId);
+        } catch (_) {}
+
+        if (currentActiveView === 'sessions') {
+            renderSessionsPage();
+        }
+    }
+    window.switchSession = switchSession;
+
+    function populateSessionDropdown() {
+        if (!chatSessionSelect) return;
+        chatSessionSelect.innerHTML = userSessions.map(s => {
+            const isSelected = s.id === currentSessionId ? 'selected' : '';
+            return `<option value="${escapeHtml(s.id)}" ${isSelected}>${escapeHtml(s.title)}</option>`;
+        }).join('');
+        chatSessionSelect.value = currentSessionId;
+    }
+
+    if (chatSessionSelect) {
+        chatSessionSelect.addEventListener('change', (e) => {
+            const newSessionId = e.target.value;
+            if (newSessionId === currentSessionId) return;
+            switchSession(newSessionId, false);
+            const target = userSessions.find(s => s.id === newSessionId);
+            showAlert(`Switched to session: ${target ? target.title : newSessionId}`, 'info');
+        });
+    }
+
+    // =========================================================================
+    // SESSION CREATION LOGIC & MODALS
+    // =========================================================================
+    const sessionCreateModal = document.getElementById('session-create-modal');
+    const sessionCreateInput = document.getElementById('session-create-input');
+    const sessionCreateError = document.getElementById('session-create-error');
+    const btnConfirmSessionCreate = document.getElementById('btn-confirm-session-create');
+    const btnCancelSessionCreate = document.getElementById('btn-cancel-session-create');
+    const btnCloseSessionCreate = document.getElementById('btn-close-session-create');
+    const sessionCreateBackdrop = document.getElementById('session-create-backdrop');
+    const btnCreateSessionChat = document.getElementById('btn-create-session-chat');
+    const btnCreateSessionMain = document.getElementById('btn-create-session-main');
+
+    function openCreateSessionModal() {
+        if (sessionCreateInput) sessionCreateInput.value = '';
+        if (sessionCreateError) {
+            sessionCreateError.textContent = '';
+            sessionCreateError.classList.add('hidden');
+        }
+        if (sessionCreateModal) sessionCreateModal.classList.remove('hidden');
+        setTimeout(() => {
+            if (sessionCreateInput) sessionCreateInput.focus();
+        }, 60);
+    }
+    window.openCreateSessionModal = openCreateSessionModal;
+    window.handleCreateNewSession = openCreateSessionModal;
+
+    function closeCreateSessionModal() {
+        if (sessionCreateModal) sessionCreateModal.classList.add('hidden');
+    }
+
+    function handleConfirmCreateSession() {
+        const rawName = sessionCreateInput ? sessionCreateInput.value.trim() : '';
+        if (!rawName) {
+            if (sessionCreateError) {
+                sessionCreateError.textContent = 'Please enter a valid session name.';
+                sessionCreateError.classList.remove('hidden');
+            }
+            if (sessionCreateInput) sessionCreateInput.focus();
+            return;
+        }
+
+        // Check duplicates (case-insensitive)
+        const isDuplicate = userSessions.some(s => s.title.trim().toLowerCase() === rawName.toLowerCase());
+        if (isDuplicate) {
+            if (sessionCreateError) {
+                sessionCreateError.textContent = `A session named "${rawName}" already exists. Please choose a different name.`;
+                sessionCreateError.classList.remove('hidden');
+            }
+            if (sessionCreateInput) sessionCreateInput.focus();
+            return;
+        }
+
+        // Save active session first
+        saveActiveSessionState();
+
+        const newId = 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const newSession = {
+            id: newId,
+            title: rawName,
+            preview: 'Fresh conversation workspace ready.',
+            messageCount: 0,
+            lastActive: Date.now(),
+            selected_documents: Array.from(selectedDocs),
+            history: [],
+            html: null,
+            isPinned: false
+        };
+
+        userSessions.unshift(newSession);
+        saveUserSessions();
+
+        closeCreateSessionModal();
+        switchSession(newId, true);
+        navigateToView('chat');
+        showAlert(`✓ Created and activated session "${rawName}"`, 'success');
+    }
+
+    if (btnConfirmSessionCreate) btnConfirmSessionCreate.addEventListener('click', handleConfirmCreateSession);
+    if (btnCancelSessionCreate) btnCancelSessionCreate.addEventListener('click', closeCreateSessionModal);
+    if (btnCloseSessionCreate) btnCloseSessionCreate.addEventListener('click', closeCreateSessionModal);
+    if (sessionCreateBackdrop) sessionCreateBackdrop.addEventListener('click', closeCreateSessionModal);
+
+    if (sessionCreateInput) {
+        sessionCreateInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleConfirmCreateSession();
+            } else if (e.key === 'Escape') {
+                closeCreateSessionModal();
+            }
+        });
+        sessionCreateInput.addEventListener('input', () => {
+            if (sessionCreateError && !sessionCreateError.classList.contains('hidden')) {
+                sessionCreateError.classList.add('hidden');
+            }
+        });
+    }
+
+    if (btnCreateSessionChat) btnCreateSessionChat.addEventListener('click', openCreateSessionModal);
+    if (btnCreateSessionMain) btnCreateSessionMain.addEventListener('click', openCreateSessionModal);
+
+    // =========================================================================
+    // SESSION RENAMING LOGIC & MODALS
+    // =========================================================================
+    const sessionRenameModal = document.getElementById('session-rename-modal');
+    const sessionRenameInput = document.getElementById('session-rename-input');
+    const btnConfirmRename = document.getElementById('btn-confirm-session-rename');
+    const btnCancelRename = document.getElementById('btn-cancel-session-rename');
+    const btnCloseRename = document.getElementById('btn-close-session-rename');
+    const sessionRenameBackdrop = document.getElementById('session-rename-backdrop');
+
+    window.handleOpenRenameModal = function(sessionId) {
+        const session = userSessions.find(s => s.id === sessionId);
+        if (!session) return;
+        sessionToRenameId = sessionId;
+        if (sessionRenameInput) sessionRenameInput.value = session.title;
+        if (sessionRenameModal) sessionRenameModal.classList.remove('hidden');
+        setTimeout(() => {
+            if (sessionRenameInput) {
+                sessionRenameInput.focus();
+                sessionRenameInput.select();
+            }
+        }, 60);
+    };
+
+    function closeRenameModal() {
+        if (sessionRenameModal) sessionRenameModal.classList.add('hidden');
+        sessionToRenameId = null;
+    }
+
+    function handleConfirmRename() {
+        const newTitle = sessionRenameInput ? sessionRenameInput.value.trim() : '';
+        if (!newTitle) {
+            showAlert('Session title cannot be empty.', 'error');
+            return;
+        }
+
+        if (sessionToRenameId) {
+            // Duplicate check across other sessions
+            const isDup = userSessions.some(s => s.id !== sessionToRenameId && s.title.trim().toLowerCase() === newTitle.toLowerCase());
+            if (isDup) {
+                showAlert(`A session named "${newTitle}" already exists.`, 'error');
+                return;
+            }
+
+            const target = userSessions.find(x => x.id === sessionToRenameId);
+            if (target) {
+                target.title = newTitle;
+                target.customTitle = true;
+                saveUserSessions();
+                populateSessionDropdown();
+                renderSessionsPage();
+
+                // If currently active, update welcome message if visible
+                if (currentSessionId === target.id) {
+                    const welcomeTitle = document.querySelector('#welcome-message h3');
+                    if (welcomeTitle) {
+                        welcomeTitle.textContent = `Session: ${newTitle}`;
+                    }
+                }
+                showAlert(`✓ Renamed session to "${newTitle}"`, 'success');
+            }
+        }
+        closeRenameModal();
+    }
+
+    if (btnConfirmRename) btnConfirmRename.addEventListener('click', handleConfirmRename);
+    if (btnCancelRename) btnCancelRename.addEventListener('click', closeRenameModal);
+    if (btnCloseRename) btnCloseRename.addEventListener('click', closeRenameModal);
+    if (sessionRenameBackdrop) sessionRenameBackdrop.addEventListener('click', closeRenameModal);
+
+    if (sessionRenameInput) {
+        sessionRenameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleConfirmRename();
+            } else if (e.key === 'Escape') {
+                closeRenameModal();
+            }
+        });
+    }
+
+    // =========================================================================
+    // SESSION DELETION LOGIC & MODALS
+    // =========================================================================
+    const sessionDeleteModal = document.getElementById('session-delete-modal');
+    const deleteSessionTitle = document.getElementById('delete-session-title');
+    const btnConfirmDeleteSession = document.getElementById('btn-confirm-session-delete');
+    const btnCancelDeleteSession = document.getElementById('btn-cancel-session-delete');
+    const btnCloseDeleteSession = document.getElementById('btn-close-session-delete');
+    const sessionDeleteBackdrop = document.getElementById('session-delete-backdrop');
+
+    window.handleOpenDeleteSessionModal = function(sessionId) {
+        const session = userSessions.find(s => s.id === sessionId);
+        if (!session) return;
+        sessionToDeleteId = sessionId;
+        if (deleteSessionTitle) deleteSessionTitle.textContent = `"${session.title}"`;
+        if (sessionDeleteModal) sessionDeleteModal.classList.remove('hidden');
+    };
+
+    function closeDeleteSessionModal() {
+        if (sessionDeleteModal) sessionDeleteModal.classList.add('hidden');
+        sessionToDeleteId = null;
+    }
+
+    function handleConfirmDeleteSession() {
+        if (!sessionToDeleteId) return;
+
+        const wasActive = (currentSessionId === sessionToDeleteId);
+        const deletedSession = userSessions.find(s => s.id === sessionToDeleteId);
+        const deletedTitle = deletedSession ? deletedSession.title : 'Session';
+
+        userSessions = userSessions.filter(x => x.id !== sessionToDeleteId);
+
+        // If no sessions left, create fresh default session
+        if (userSessions.length === 0) {
+            userSessions = [
+                {
+                    id: 'default',
+                    title: 'Default Session',
+                    preview: 'General questions and overview of your document library.',
+                    messageCount: 0,
+                    lastActive: Date.now(),
+                    selected_documents: Array.from(selectedDocs),
+                    history: [],
+                    html: null,
+                    isPinned: false
+                }
+            ];
+        }
+
+        saveUserSessions();
+
+        if (wasActive) {
+            switchSession(userSessions[0].id, true);
+        } else {
+            populateSessionDropdown();
+        }
+
+        renderSessionsPage();
+        closeDeleteSessionModal();
+        showAlert(`Deleted session "${deletedTitle}".`, 'info');
+    }
+
+    if (btnConfirmDeleteSession) btnConfirmDeleteSession.addEventListener('click', handleConfirmDeleteSession);
+    if (btnCancelDeleteSession) btnCancelDeleteSession.addEventListener('click', closeDeleteSessionModal);
+    if (btnCloseDeleteSession) btnCloseDeleteSession.addEventListener('click', closeDeleteSessionModal);
+    if (sessionDeleteBackdrop) sessionDeleteBackdrop.addEventListener('click', closeDeleteSessionModal);
+
+    window.handleTogglePinSession = function(sessionId) {
+        const session = userSessions.find(s => s.id === sessionId);
+        if (!session) return;
+        session.isPinned = !session.isPinned;
+        saveUserSessions();
+        renderSessionsPage();
+        showAlert(session.isPinned ? `📌 Pinned ${session.title}` : `Unpinned ${session.title}`, 'info');
+    };
+
+    window.handleOpenSession = function(sessionId) {
+        switchSession(sessionId, false);
+        navigateToView('chat');
+        const s = userSessions.find(x => x.id === sessionId);
+        showAlert(`Opened session: ${s ? s.title : sessionId}`, 'info');
+    };
 
     function formatRelativeTime(timestamp) {
         if (!timestamp) return 'Recently';
@@ -5826,10 +6075,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (list.length === 0) {
             grid.innerHTML = `
                 <div class="empty-sessions-card">
-                    <span class="empty-sessions-icon">💬</span>
+                    <span class="empty-sessions-icon">🕘</span>
                     <h3>${filterVal ? 'No matching sessions found' : 'No sessions yet'}</h3>
                     <p>${filterVal ? 'Try adjusting your search query.' : 'Start a new conversation about your documents.'}</p>
-                    <button type="button" class="btn btn-primary btn-sm" onclick="handleCreateNewSession()">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="openCreateSessionModal()">
                         <span>➕</span> New Session
                     </button>
                 </div>
@@ -5840,18 +6089,21 @@ document.addEventListener('DOMContentLoaded', () => {
         grid.innerHTML = list.map(s => {
             const safeTitle = escapeHtml(s.title || 'Untitled Session');
             const safePreview = escapeHtml(s.preview || 'No conversation preview available.');
-            const msgs = s.messageCount || 0;
-            const docs = s.docCount !== undefined ? s.docCount : (typeof allDocumentsList !== 'undefined' ? allDocumentsList.length : 1);
+            const msgs = s.messageCount !== undefined ? s.messageCount : (s.history ? s.history.filter(m => m.role === 'user').length : 0);
+            const docs = (s.selected_documents && Array.isArray(s.selected_documents) && s.selected_documents.length > 0)
+                ? s.selected_documents.length
+                : (typeof allDocumentsList !== 'undefined' ? allDocumentsList.length : 1);
             const timeAgo = formatRelativeTime(s.lastActive);
-            const pinIcon = s.isPinned ? '📌' : '';
             const pinText = s.isPinned ? 'Unpin' : 'Pin to Top';
+            const isActiveSession = s.id === currentSessionId;
 
             return `
-                <div class="session-card ${s.isPinned ? 'pinned-session' : ''}" id="session-card-${s.id}">
+                <div class="session-card ${s.isPinned ? 'pinned-session' : ''} ${isActiveSession ? 'active-session-card' : ''}" id="session-card-${s.id}">
                     <div class="session-card-header">
                         <div class="session-title-wrap">
                             <h3 class="session-title">${safeTitle}</h3>
                             ${s.isPinned ? '<span class="session-pin-badge" title="Pinned session">📌</span>' : ''}
+                            ${isActiveSession ? '<span class="session-active-pill" style="font-size:10px; background:rgba(99,102,241,0.2); color:#a5b4fc; padding:2px 6px; border-radius:4px; font-weight:600;">ACTIVE</span>' : ''}
                         </div>
                         <div class="session-actions-menu-wrap">
                             <button type="button" class="btn-session-more" onclick="toggleSessionMenu(event, '${s.id}')" title="Session options">⋯</button>
@@ -5884,10 +6136,134 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         }).join('');
     }
+    window.renderSessionsPage = renderSessionsPage;
+
+    // =========================================================================
+    // OLD CHAT MODAL FUNCTIONS & SEARCH FILTER
+    // =========================================================================
+    function openOldChatModal() {
+        if (typeof saveActiveSessionState === 'function') {
+            saveActiveSessionState();
+        }
+        if (typeof initUserSessions === 'function') {
+            initUserSessions();
+        }
+        if (oldChatSearchInput) {
+            oldChatSearchInput.value = '';
+        }
+        renderOldChatList('');
+        if (oldChatModal) {
+            oldChatModal.classList.remove('hidden');
+        }
+        setTimeout(() => {
+            if (oldChatSearchInput) oldChatSearchInput.focus();
+        }, 60);
+    }
+    window.openOldChatModal = openOldChatModal;
+
+    function closeOldChatModal() {
+        if (oldChatModal) {
+            oldChatModal.classList.add('hidden');
+        }
+    }
+    window.closeOldChatModal = closeOldChatModal;
+
+    function renderOldChatList(filter = '') {
+        if (!oldChatList) return;
+        const filterVal = filter.trim().toLowerCase();
+        let list = [...userSessions];
+
+        if (filterVal) {
+            list = list.filter(s =>
+                (s.title && s.title.toLowerCase().includes(filterVal)) ||
+                (s.firstQuestion && s.firstQuestion.toLowerCase().includes(filterVal)) ||
+                (s.preview && s.preview.toLowerCase().includes(filterVal))
+            );
+        }
+
+        // Sort: pinned first, then lastActive descending
+        list.sort((a, b) => {
+            if (a.isPinned && !b.isPinned) return -1;
+            if (!a.isPinned && b.isPinned) return 1;
+            return (b.lastActive || 0) - (a.lastActive || 0);
+        });
+
+        if (oldChatCountLabel) {
+            oldChatCountLabel.textContent = `${list.length} saved conversation${list.length === 1 ? '' : 's'}`;
+        }
+
+        if (list.length === 0) {
+            oldChatList.innerHTML = `
+                <div class="empty-old-chats">
+                    <span style="font-size: 28px; display: block; margin-bottom: 8px;">💬</span>
+                    <p style="color: var(--text-secondary, #94a3b8); font-size: 13px;">${filterVal ? 'No matching conversations found.' : 'No saved conversations yet.'}</p>
+                </div>
+            `;
+            return;
+        }
+
+        oldChatList.innerHTML = list.map(s => {
+            const safeTitle = escapeHtml(s.title || 'Untitled Session');
+            const firstQ = s.firstQuestion ? escapeHtml(s.firstQuestion) : '';
+            const safePreview = escapeHtml(s.preview || 'No conversation preview available.');
+            const msgs = s.messageCount !== undefined ? s.messageCount : (s.history ? s.history.filter(m => m.role === 'user').length : 0);
+            const timeAgo = formatRelativeTime(s.lastActive);
+            const isActive = s.id === currentSessionId;
+
+            return `
+                <div class="old-chat-card ${isActive ? 'active-chat' : ''}" onclick="selectOldChat('${escapeHtml(s.id)}')" title="Click to open this conversation">
+                    <div class="old-chat-header">
+                        <div class="old-chat-title-wrap">
+                            <span class="old-chat-icon">${s.isPinned ? '📌' : '💬'}</span>
+                            <span class="old-chat-title">${safeTitle}</span>
+                            ${isActive ? '<span class="old-chat-active-badge">CURRENT</span>' : ''}
+                        </div>
+                        <span class="old-chat-time">${timeAgo}</span>
+                    </div>
+                    ${firstQ && firstQ !== safeTitle ? `<div class="old-chat-first-q"><strong>Q:</strong> ${firstQ}</div>` : `<div class="old-chat-preview">${safePreview}</div>`}
+                    <div class="old-chat-meta">
+                        <span>💬 ${msgs} message${msgs === 1 ? '' : 's'}</span>
+                        <button type="button" class="btn btn-primary btn-sm old-chat-open-btn" onclick="event.stopPropagation(); selectOldChat('${escapeHtml(s.id)}')">
+                            Open &rarr;
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+    window.renderOldChatList = renderOldChatList;
+
+    window.selectOldChat = function(sessionId) {
+        if (!sessionId) return;
+        closeOldChatModal();
+        if (sessionId !== currentSessionId) {
+            switchSession(sessionId, false);
+            navigateToView('chat');
+            const target = userSessions.find(s => s.id === sessionId);
+            showAlert(`Reopened conversation: ${target ? target.title : sessionId}`, 'info');
+        }
+        if (userInput) {
+            userInput.focus();
+        }
+    };
+
+    if (btnCloseOldChat) btnCloseOldChat.addEventListener('click', closeOldChatModal);
+    if (btnCancelOldChat) btnCancelOldChat.addEventListener('click', closeOldChatModal);
+    if (oldChatBackdrop) oldChatBackdrop.addEventListener('click', closeOldChatModal);
+
+    if (oldChatSearchInput) {
+        oldChatSearchInput.addEventListener('input', (e) => {
+            renderOldChatList(e.target.value);
+        });
+        oldChatSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeOldChatModal();
+            }
+        });
+    }
 
     window.toggleSessionMenu = function(event, sessionId) {
         event.stopPropagation();
-        // Close all other menus
         document.querySelectorAll('.session-dropdown-menu').forEach(m => {
             if (m.id !== `session-menu-${sessionId}`) m.classList.add('hidden');
         });
@@ -5899,193 +6275,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.session-dropdown-menu').forEach(m => m.classList.add('hidden'));
     });
 
-    window.handleCreateNewSession = function() {
-        const id = 'session_' + Date.now();
-        const num = userSessions.length + 1;
-        const newSession = {
-            id: id,
-            title: `Session ${num}`,
-            preview: 'Fresh conversation ready for questions.',
-            messageCount: 0,
-            lastActive: Date.now(),
-            docCount: (typeof allDocumentsList !== 'undefined') ? allDocumentsList.length : 1,
-            isPinned: false
-        };
-        userSessions.unshift(newSession);
-        saveUserSessions();
-
-        // Also add to sessionsMemory & dropdown if present
-        if (typeof sessionsMemory !== 'undefined') {
-            sessionsMemory[id] = { history: [], html: null };
-            currentSessionKey = id;
-        }
-
-        const chatSelect = document.getElementById('chat-session-select');
-        if (chatSelect) {
-            const opt = document.createElement('option');
-            opt.value = id;
-            opt.textContent = newSession.title;
-            opt.selected = true;
-            chatSelect.appendChild(opt);
-        }
-
-        // Clear active chat messages and navigate to Chat
-        if (chatMessages) {
-            chatMessages.innerHTML = `
-                <div class="message system-message" id="welcome-message">
-                    <div class="message-avatar">💬</div>
-                    <div class="message-content">
-                        <h3>Session: ${escapeHtml(newSession.title)}</h3>
-                        <p>Ask questions grounded in your selected documents.</p>
-                    </div>
-                </div>
-            `;
-        }
-        if (typeof chatHistory !== 'undefined') chatHistory = [];
-        if (userInput) userInput.value = '';
-
-        navigateToView('chat');
-        showAlert(`Created ${newSession.title}`, 'success');
-    };
-
-    window.handleOpenSession = function(sessionId) {
-        const session = userSessions.find(s => s.id === sessionId);
-        if (!session) return;
-
-        session.lastActive = Date.now();
-        saveUserSessions();
-
-        // Set active session in memory
-        if (typeof sessionsMemory !== 'undefined') {
-            currentSessionKey = sessionId;
-            const target = sessionsMemory[sessionId] || { history: [], html: null };
-            chatHistory = target.history ? [...target.history] : [];
-            if (chatMessages) {
-                if (target.html) {
-                    chatMessages.innerHTML = target.html;
-                } else {
-                    chatMessages.innerHTML = `
-                        <div class="message system-message" id="welcome-message">
-                            <div class="message-avatar">💬</div>
-                            <div class="message-content">
-                                <h3>Session: ${escapeHtml(session.title)}</h3>
-                                <p>Continue your conversation grounded in your selected documents.</p>
-                            </div>
-                        </div>
-                    `;
-                }
-            }
-        }
-
-        const chatSelect = document.getElementById('chat-session-select');
-        if (chatSelect) {
-            let found = false;
-            for (let i = 0; i < chatSelect.options.length; i++) {
-                if (chatSelect.options[i].value === sessionId) {
-                    chatSelect.selectedIndex = i;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                const opt = document.createElement('option');
-                opt.value = session.id;
-                opt.textContent = session.title;
-                opt.selected = true;
-                chatSelect.appendChild(opt);
-            }
-        }
-
-        navigateToView('chat');
-        showAlert(`Opened session: ${session.title}`, 'info');
-    };
-
-    window.handleOpenRenameModal = function(sessionId) {
-        const session = userSessions.find(s => s.id === sessionId);
-        if (!session) return;
-        sessionToRenameId = sessionId;
-        const input = document.getElementById('session-rename-input');
-        const modal = document.getElementById('session-rename-modal');
-        if (input) input.value = session.title;
-        if (modal) modal.classList.remove('hidden');
-        setTimeout(() => { if (input) input.focus(); }, 100);
-    };
-
-    window.handleTogglePinSession = function(sessionId) {
-        const session = userSessions.find(s => s.id === sessionId);
-        if (!session) return;
-        session.isPinned = !session.isPinned;
-        saveUserSessions();
-        renderSessionsPage();
-        showAlert(session.isPinned ? `Pinned ${session.title}` : `Unpinned ${session.title}`, 'info');
-    };
-
-    window.handleOpenDeleteSessionModal = function(sessionId) {
-        const session = userSessions.find(s => s.id === sessionId);
-        if (!session) return;
-        sessionToDeleteId = sessionId;
-        const titleEl = document.getElementById('delete-session-title');
-        const modal = document.getElementById('session-delete-modal');
-        if (titleEl) titleEl.textContent = `"${session.title}"`;
-        if (modal) modal.classList.remove('hidden');
-    };
-
-    // Session Modal Event Listeners
-    const btnConfirmRename = document.getElementById('btn-confirm-session-rename');
-    const btnCancelRename = document.getElementById('btn-cancel-session-rename');
-    const btnCloseRename = document.getElementById('btn-close-session-rename');
-    const sessionRenameModal = document.getElementById('session-rename-modal');
-
-    function closeRenameModal() {
-        if (sessionRenameModal) sessionRenameModal.classList.add('hidden');
-        sessionToRenameId = null;
-    }
-    if (btnCancelRename) btnCancelRename.addEventListener('click', closeRenameModal);
-    if (btnCloseRename) btnCloseRename.addEventListener('click', closeRenameModal);
-    if (btnConfirmRename) {
-        btnConfirmRename.addEventListener('click', () => {
-            const input = document.getElementById('session-rename-input');
-            const newTitle = input ? input.value.trim() : '';
-            if (newTitle && sessionToRenameId) {
-                const s = userSessions.find(x => x.id === sessionToRenameId);
-                if (s) {
-                    s.title = newTitle;
-                    saveUserSessions();
-                    renderSessionsPage();
-                    showAlert('Session renamed successfully.', 'success');
-                }
-            }
-            closeRenameModal();
-        });
-    }
-
-    const btnConfirmDeleteSession = document.getElementById('btn-confirm-session-delete');
-    const btnCancelDeleteSession = document.getElementById('btn-cancel-session-delete');
-    const btnCloseDeleteSession = document.getElementById('btn-close-session-delete');
-    const sessionDeleteModal = document.getElementById('session-delete-modal');
-
-    function closeDeleteSessionModal() {
-        if (sessionDeleteModal) sessionDeleteModal.classList.add('hidden');
-        sessionToDeleteId = null;
-    }
-    if (btnCancelDeleteSession) btnCancelDeleteSession.addEventListener('click', closeDeleteSessionModal);
-    if (btnCloseDeleteSession) btnCloseDeleteSession.addEventListener('click', closeDeleteSessionModal);
-    if (btnConfirmDeleteSession) {
-        btnConfirmDeleteSession.addEventListener('click', () => {
-            if (sessionToDeleteId) {
-                userSessions = userSessions.filter(x => x.id !== sessionToDeleteId);
-                saveUserSessions();
-                renderSessionsPage();
-                showAlert('Session deleted.', 'info');
-            }
-            closeDeleteSessionModal();
-        });
-    }
-
     // Sessions Search Input & Topbar Buttons
     const sessionsSearchInput = document.getElementById('sessions-search-input');
     const btnClearSessionsSearch = document.getElementById('btn-clear-sessions-search');
-    const btnCreateSessionMain = document.getElementById('btn-create-session-main');
 
     if (sessionsSearchInput) {
         sessionsSearchInput.addEventListener('input', () => {
@@ -6104,9 +6296,13 @@ document.addEventListener('DOMContentLoaded', () => {
             renderSessionsPage();
         });
     }
-    if (btnCreateSessionMain) {
-        btnCreateSessionMain.addEventListener('click', handleCreateNewSession);
+
+    // Initialize User Sessions and restore active conversation
+    initUserSessions();
+    if (typeof switchSession === 'function' && currentSessionId) {
+        switchSession(currentSessionId, true);
     }
+
 
     // =========================================================================
     // HOW RAG WORKS WORKSPACE IMPLEMENTATION (INTERACTIVE DEMO & ANIMATIONS)

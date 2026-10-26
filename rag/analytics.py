@@ -10,7 +10,12 @@ from typing import Dict, Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "analytics.db")
+RAG_DATA_DIR = os.environ.get("RAG_DATA_DIR", "").strip()
+if RAG_DATA_DIR:
+    os.makedirs(RAG_DATA_DIR, exist_ok=True)
+    DB_PATH = os.path.join(RAG_DATA_DIR, "analytics.db")
+else:
+    DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "analytics.db")
 
 def get_db_connection():
     """Returns a SQLite connection with dict-like row access."""

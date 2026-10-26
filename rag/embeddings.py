@@ -1,4 +1,9 @@
+import os
 import logging
+
+# Enable fast local HuggingFace cache loading
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 # Set up logger
 logger = logging.getLogger(__name__)

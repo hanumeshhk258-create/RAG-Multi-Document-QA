@@ -7,6 +7,10 @@ import logging
 import hashlib
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Any, Set
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from werkzeug.utils import secure_filename
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response
 
@@ -34,6 +38,7 @@ from rag.vectorstore import (
     load_vectorstore,
     clear_vectorstore,
     load_vectorstore_metadata,
+    clear_vectorstore_metadata_cache,
     compute_file_hash,
     _save_metadata_dict
 )
@@ -46,6 +51,7 @@ from rag.retriever import (
     retrieve_multi_document_context,
     group_chunks_by_document,
     build_grouped_sources_payload,
+    filter_and_rank_sources,
     detect_followup_question,
     classify_user_query,
     rewrite_query,
@@ -60,7 +66,8 @@ from rag.evaluator import (
     evaluate_answer,
     calculate_faithfulness,
     calculate_hallucination_risk,
-    clear_verification_cache
+    clear_verification_cache,
+    FALLBACK_PHRASES
 )
 from rag.contextual_compression import (
     compress_context,
@@ -95,9 +102,17 @@ DEBUG_RAG = os.environ.get("DEBUG_RAG", "true").lower() in ("true", "1", "yes")
 # Initialize Flask application
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB max upload limit
+app.config['TEMPLATES_AUTO_RELOAD'] = True
 
-DOCUMENTS_DIR = "documents"
-VECTORSTORE_DIR = "vectorstore"
+# Persistent Data Directory Configuration (supports Render Persistent Disks via RAG_DATA_DIR)
+RAG_DATA_DIR = os.environ.get("RAG_DATA_DIR", "").strip()
+if RAG_DATA_DIR:
+    os.makedirs(RAG_DATA_DIR, exist_ok=True)
+    DOCUMENTS_DIR = os.path.join(RAG_DATA_DIR, "documents")
+    VECTORSTORE_DIR = os.path.join(RAG_DATA_DIR, "vectorstore")
+else:
+    DOCUMENTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "documents"))
+    VECTORSTORE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "vectorstore"))
 
 os.makedirs(DOCUMENTS_DIR, exist_ok=True)
 os.makedirs(VECTORSTORE_DIR, exist_ok=True)
@@ -126,6 +141,7 @@ def clear_rag_response_cache():
     global RAG_RESPONSE_CACHE, embedding_model
     RAG_RESPONSE_CACHE.clear()
     clear_verification_cache()
+    clear_vectorstore_metadata_cache()
     if hasattr(_CROSS_ENCODER, "clear_cache"):
         _CROSS_ENCODER.clear_cache()
     if embedding_model and hasattr(embedding_model, "clear_cache"):
@@ -175,6 +191,12 @@ def check_and_guard_answer_similarity(query: str, current_answer: str, chat_hist
     if not prev_assistant_ans or not prev_user_q:
         return current_answer
 
+    # Never trigger similarity guard on legitimate conversational follow-up questions
+    from rag.retriever import detect_followup_question
+    is_fu, _, _, _ = detect_followup_question(query, chat_history)
+    if is_fu:
+        return current_answer
+
     # Check if questions are distinct
     q1_tokens = set(re.findall(r'\b\w+\b', prev_user_q.lower()))
     q2_tokens = set(re.findall(r'\b\w+\b', query.lower()))
@@ -216,18 +238,17 @@ def log_perf_metrics(query: str, cache_status: str, timing_breakdown: dict, tota
     corr_ms = timing_breakdown.get("correction_ms", 0.0)
     total_ms = total_sec * 1000.0
 
-    logger.info(f"[QUERY]: '{query}' (Cache: {cache_status}) | Processing: {q_proc_ms:.1f}ms")
-    logger.info(f"[RETRIEVAL]: {retrieval_ms:.1f}ms ({retrieval_ms/1000.0:.3f}s)")
-    logger.info(f"[FAISS]: {faiss_ms:.1f}ms ({faiss_ms/1000.0:.3f}s)")
-    logger.info(f"[BM25]: {bm25_ms:.1f}ms ({bm25_ms/1000.0:.3f}s)")
-    logger.info(f"[HYBRID]: {merge_ms:.1f}ms ({merge_ms/1000.0:.3f}s)")
-    logger.info(f"[RERANK]: {rerank_ms:.1f}ms ({rerank_ms/1000.0:.3f}s)")
-    logger.info(f"[COMPRESSION]: {comp_ms:.1f}ms ({comp_ms/1000.0:.3f}s)")
-    logger.info(f"[PROMPT]: {prompt_ms:.1f}ms ({prompt_ms/1000.0:.3f}s)")
-    logger.info(f"[GENERATION]: {gen_ms:.1f}ms ({gen_sec:.3f}s)" if isinstance(gen_sec, (int, float)) else f"[GENERATION]: {gen_sec}")
-    logger.info(f"[VERIFICATION]: {verif_ms:.1f}ms ({verif_sec:.3f}s)" if isinstance(verif_sec, (int, float)) else f"[VERIFICATION]: {verif_sec}")
-    logger.info(f"[CORRECTION]: {corr_ms:.1f}ms ({corr_ms/1000.0:.3f}s)")
-    logger.info(f"[TOTAL]: {total_ms:.1f}ms ({total_sec:.3f}s)")
+    logger.info(
+        f"\n--- RAG STAGE TIMING BREAKDOWN ---\n"
+        f"Query preprocessing: {q_proc_ms:.1f} ms\n"
+        f"Retrieval: {retrieval_ms:.1f} ms\n"
+        f"Reranking: {rerank_ms:.1f} ms\n"
+        f"Compression: {comp_ms:.1f} ms\n"
+        f"Generation: {gen_ms:.1f} ms\n"
+        f"Verification: {verif_ms:.1f} ms\n"
+        f"Total: {total_ms:.1f} ms ({total_sec:.3f} s)\n"
+        f"----------------------------------"
+    )
 
 
 def log_debug_rag_trace(
@@ -448,7 +469,6 @@ def serve_pdf_document(filename):
 # =============================================================================
 @app.route('/api/status', methods=['GET'])
 @app.route('/status', methods=['GET'])
-@app.route('/api/health', methods=['GET'])
 def get_status_endpoint():
     """
     Returns the current document count, page count, chunk count, vectorstore status, and per-document list.
@@ -668,32 +688,11 @@ def index_documents():
     meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
     doc_info_map = {d["filename"]: d for d in meta.get("documents_info", [])}
 
-    all_disk_files = [f for f in sorted(os.listdir(DOCUMENTS_DIR)) if f.lower().endswith('.pdf')]
-    if not all_disk_files:
+    if not doc_info_map:
         return jsonify({
             "success": False,
-            "error": "No PDF documents found. Please upload one or more PDFs first."
+            "error": "No uploaded documents found. Please upload one or more PDFs first."
         }), 400
-
-    # Ensure all disk files are in doc_info_map
-    for f in all_disk_files:
-        if f not in doc_info_map:
-            fpath = os.path.join(DOCUMENTS_DIR, f)
-            info = get_pdf_info(fpath, f)
-            f_hash = compute_file_hash(fpath)
-            doc_info_map[f] = {
-                "document_id": f"doc_{f_hash[:12]}",
-                "filename": f,
-                "file_hash": f_hash,
-                "status": "Pending",
-                "pages": info.get("page_count", 1),
-                "chunks": 0,
-                "size_kb": info.get("size_kb", 0),
-                "file_size": os.path.getsize(fpath) if os.path.exists(fpath) else 0,
-                "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "indexed_at": None,
-                "error_message": None
-            }
 
     # Determine which documents need indexing (Pending or Error)
     to_index = []
@@ -1285,8 +1284,8 @@ def chat_endpoint():
     data = request.get_json(silent=True) or {}
     query = (data.get("question") or data.get("message") or data.get("query") or "").strip()
     
-    # Accept conversation or history (max 10 latest turns)
-    raw_history = data.get("conversation") or data.get("history") or []
+    # Accept conversation, history, or chat_history (max 10 latest turns)
+    raw_history = data.get("conversation") or data.get("history") or data.get("chat_history") or []
     chat_history = raw_history[-10:] if isinstance(raw_history, list) else []
     
     selected_documents = data.get("selected_documents", None)
@@ -1342,7 +1341,16 @@ def chat_endpoint():
     vs = get_active_vectorstore()
     meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
     indexed_docs = meta.get("indexed_documents", [])
-    
+    total_docs = meta.get("total_documents", len(meta.get("documents_info", [])))
+
+    if total_docs == 0:
+        logger.warning("Chat rejected: No documents uploaded.")
+        return jsonify({
+            "success": False,
+            "error": "Please upload and index at least one PDF before asking document-related questions.",
+            "error_code": "VALIDATION_ERROR"
+        }), 400
+
     if vs is None or meta.get("total_chunks", 0) == 0 or not indexed_docs:
         logger.warning("Chat rejected: No vector database or chunks indexed.")
         return jsonify({
@@ -1428,7 +1436,8 @@ def chat_endpoint():
         r'^(explain|describe)\s+(it|this|that|them|these|those)\s+(simply|in simple words|in detail)[\?!.,;]?$',
         r'^(give|show)\s+(me\s+)?(an?\s+)?example[\?!.,;]?$',
         r'^(give|show)\s+(me\s+)?(an?\s+)?example\s+(of\s+)?(it|this|that|them|these|those)[\?!.,;]?$',
-        r'^(what is|what are|explain)\s+(the\s+)?(first|second|third|fourth|fifth|last|final)\s*(one|property|type|point|command)?[\?!.,;]?$',
+        r'^(what is|what are|explain|describe|tell me about)\s+(the\s+)?(first|second|third|fourth|fifth|last|final)\s*(one|property|type|point|command|concept|item)?(\s+of\s+(that|this|it|them))?[\?!.,;]?$',
+        r'^(explain|describe|tell me about)\s+(the\s+)?(first|second|third|fourth|fifth|last|final)\s+property(\s+of\s+(that|this|it|them))?[\?!.,;]?$',
         r'^(what does\s+(the\s+)?(first|second|third|fourth|last)\s+one\s+do)[\?!.,;]?$',
         r'^(what about\s+(it|this|that|them|these|those|the\s+last\s+(one|property|command)?))[\?!.,;]?$',
         r'^(what are\s+(its|their|the|these|those)\s+(types|kinds|categories|examples))[\?!.,;]?$'
@@ -1482,13 +1491,47 @@ def chat_endpoint():
             effective_rewritten = query.strip()
             active_context_topic = ""
         elif is_followup:
-            if client is not None:
-                gemini_rewritten = rewrite_query_with_gemini(client, query, chat_history, api_key=api_key)
             rule_rewritten, prior_topic = rewrite_query(query, chat_history, last_context)
-            effective_rewritten = gemini_rewritten if (gemini_rewritten and len(gemini_rewritten) >= len(query.strip())) else rule_rewritten
-            if not effective_rewritten:
+            if rule_rewritten and rule_rewritten.strip().lower() != query.strip().lower():
+                effective_rewritten = rule_rewritten
+                gemini_rewritten = None
+            elif client is not None:
+                gemini_rewritten = rewrite_query_with_gemini(client, query, chat_history, api_key=api_key)
+                effective_rewritten = gemini_rewritten if (gemini_rewritten and len(gemini_rewritten) >= len(query.strip())) else query.strip()
+            else:
                 effective_rewritten = query.strip()
-            active_context_topic = context_topic or prior_topic
+            active_context_topic = prior_topic or context_topic
+
+            # Guard: Unresolved follow-up reference where query lacks standalone context
+            ord_pattern = re.compile(r'\b(first|second|third|fourth|fifth|last|final)\s+(property|type|point|one|command|concept|item)?\b', re.IGNORECASE)
+            pronoun_ref_pattern = re.compile(r'\b(it|this|that|them|these|those)\b', re.IGNORECASE)
+            has_unresolved_ref = bool(ord_pattern.search(query) or pronoun_ref_pattern.search(query))
+            
+            if not active_context_topic and effective_rewritten.strip().lower() == query.strip().lower() and has_unresolved_ref:
+                total_sec = round(time.perf_counter() - t_start, 2)
+                clarif_payload = {
+                    "success": True,
+                    "answer": "Please clarify which document or specific topic you would like me to explain.",
+                    "query_type": "NORMAL_QUESTION",
+                    "term": "",
+                    "rewritten_query": query,
+                    "is_followup": False,
+                    "used_context": False,
+                    "context_used": False,
+                    "sources": [],
+                    "retrieved_context": [],
+                    "response_time": total_sec,
+                    "timing_breakdown": {
+                        "retrieval_ms": 0.0,
+                        "generation_sec": 0.0,
+                        "total_sec": total_sec
+                    }
+                }
+                rec_id = record_interaction(query, clarif_payload, wall_time_sec=total_sec, selected_documents=selected_documents)
+                if rec_id:
+                    clarif_payload["id"] = rec_id
+                    clarif_payload["interaction_id"] = rec_id
+                return jsonify(clarif_payload)
 
         # Step 2: Check for Multi-Document Comparison & Cross-Document Synthesis
         comp_res = detect_comparison_question(query)
@@ -1676,10 +1719,18 @@ def chat_endpoint():
                         "answer_correction": {}
                     }
 
-                documents_used = list(set(src["document"] for src in deduped_sources))
                 final_ans = eval_data.get("final_verified_answer") or answer
                 final_ans = check_and_guard_answer_similarity(query, final_ans, chat_history)
                 draft_ans = eval_data.get("draft_answer") or answer
+
+                filtered_decomp_sources, primary_source_label_decomp, doc_rel_decomp = filter_and_rank_sources(
+                    sources=deduped_sources if has_sources else [],
+                    answer=final_ans,
+                    eval_data=eval_data,
+                    is_comparison="compare" in effective_rewritten.lower() or "difference" in effective_rewritten.lower(),
+                    query=query
+                )
+                documents_used = list(set(src["document"] for src in filtered_decomp_sources))
 
                 adaptive_payload_decomp = {
                     "retries_performed": 0,
@@ -1736,10 +1787,10 @@ def chat_endpoint():
                     "rewritten_query": effective_rewritten,
                     "documents_used": documents_used,
                     "chunks_used": len(retrieved_items),
-                    "sources": deduped_sources if has_sources else [],
-                    "grouped_sources": build_grouped_sources_payload(deduped_sources if has_sources else [], primary_doc=retrieval_stats.get("primary_document", "")),
-                    "primary_source": retrieval_stats.get("primary_source", f"{deduped_sources[0]['document']} — Page {deduped_sources[0]['page']}" if deduped_sources else "None"),
-                    "document_relevance_scores": retrieval_stats.get("document_relevance_scores", {}),
+                    "sources": filtered_decomp_sources if has_sources else [],
+                    "grouped_sources": build_grouped_sources_payload(filtered_decomp_sources if has_sources else [], primary_doc=primary_source_label_decomp.split(" — ")[0] if primary_source_label_decomp else ""),
+                    "primary_source": primary_source_label_decomp,
+                    "document_relevance_scores": doc_rel_decomp,
                     "retrieved_context": retrieved_context_data,
                     "evaluation": eval_data,
                     "retrieval_stats": retrieval_stats,
@@ -1984,6 +2035,15 @@ def chat_endpoint():
             final_ans = check_and_guard_answer_similarity(query, final_ans, chat_history)
             draft_ans = eval_data.get("draft_answer") or answer
 
+            filtered_comp_sources, primary_source_label_comp, doc_rel_comp = filter_and_rank_sources(
+                sources=deduped_sources,
+                answer=final_ans,
+                eval_data=eval_data,
+                is_comparison=True,
+                query=query
+            )
+            documents_used = list(set(src["document"] for src in filtered_comp_sources))
+
             adaptive_payload_comp = {
                 "retries_performed": 0,
                 "max_retries": 2,
@@ -2037,10 +2097,10 @@ def chat_endpoint():
                 "rewritten_query": effective_rewritten,
                 "documents_used": documents_used,
                 "chunks_used": chunks_used,
-                "sources": deduped_sources,
-                "grouped_sources": build_grouped_sources_payload(deduped_sources, primary_doc=retrieval_stats.get("primary_document", "")),
-                "primary_source": retrieval_stats.get("primary_source", f"{deduped_sources[0]['document']} — Page {deduped_sources[0]['page']}" if deduped_sources else "None"),
-                "document_relevance_scores": retrieval_stats.get("document_relevance_scores", {}),
+                "sources": filtered_comp_sources,
+                "grouped_sources": build_grouped_sources_payload(filtered_comp_sources, primary_doc=primary_source_label_comp.split(" — ")[0] if primary_source_label_comp else ""),
+                "primary_source": primary_source_label_comp,
+                "document_relevance_scores": doc_rel_comp,
                 "retrieved_context": retrieved_context_data,
                 "evaluation": eval_data,
                 "retrieval_stats": retrieval_stats,
@@ -2132,7 +2192,7 @@ def chat_endpoint():
                 "sources": adaptive_result.get("sources", []),
                 "grouped_sources": adaptive_result.get("grouped_sources", []),
                 "primary_source": adaptive_result.get("primary_source", ""),
-                "document_relevance_scores": retrieval_stats.get("document_relevance_scores", {}),
+                "document_relevance_scores": adaptive_result.get("document_relevance_scores") or retrieval_stats.get("document_relevance_scores", {}),
                 "retrieved_context": adaptive_result.get("retrieved_context", []),
                 "evaluation": eval_data,
                 "retrieval_stats": retrieval_stats,
@@ -2173,7 +2233,9 @@ def chat_endpoint():
                 evidence_coverage=cov_str,
                 final_status=eval_data.get("groundedness_label", "Verified")
             )
-            if not chat_history and not last_context:
+            ans_norm_val = response_payload_normal.get("answer", "")
+            is_refusal_norm = not ans_norm_val or any(fb in ans_norm_val.lower() for fb in FALLBACK_PHRASES) or len(response_payload_normal.get("sources", [])) == 0
+            if not chat_history and not last_context and not is_refusal_norm:
                 RAG_RESPONSE_CACHE[cache_key] = response_payload_normal
             rec_id = record_interaction(query, response_payload_normal, wall_time_sec=total_sec_normal, selected_documents=selected_documents)
             if rec_id:
@@ -2435,16 +2497,43 @@ def reset_all():
         return jsonify({"success": False, "error": f"Error during reset: {str(err)}"}), 500
 
 
+@app.route('/api/new_chat', methods=['POST'])
+@app.route('/api/clear_chat', methods=['POST'])
+def clear_chat_session_endpoint():
+    """
+    Clears the active conversation context for the session.
+    """
+    return jsonify({
+        "success": True,
+        "message": "Conversation context reset successfully."
+    })
+
+
+@app.route('/api/cache/clear', methods=['POST'])
+def clear_caches_endpoint():
+    """
+    Clears the active RAG response cache and document search cache.
+    """
+    clear_rag_response_cache()
+    clear_search_cache()
+    return jsonify({
+        "success": True,
+        "message": "RAG response cache and search cache cleared successfully."
+    })
+
+
+@app.route('/healthz', methods=['GET'])
+@app.route('/health', methods=['GET'])
 @app.route('/api/health', methods=['GET'])
 def health_endpoint():
-    """Returns basic system health and model configuration."""
+    """Lightweight, safe health check endpoint for Render and external container monitors without leaking secrets."""
     api_key = load_gemini_api_key()
     return jsonify({
-        "status": "ok",
+        "status": "healthy",
+        "service": "intelligent-document-rag",
         "gemini_configured": is_valid_api_key_format(api_key),
-        "gemini_model": get_configured_model_name(),
-        "vectorstore_ready": active_vectorstore is not None
-    })
+        "vectorstore_ready": active_vectorstore is not None or os.path.exists(os.path.join(VECTORSTORE_DIR, "index.faiss"))
+    }), 200
 
 
 @app.route('/api/test-rag', methods=['GET'])
@@ -2726,6 +2815,8 @@ def get_evaluation_results_endpoint():
 
 
 if __name__ == '__main__':
-    print("Starting RAG Web Server on http://127.0.0.1:5000 ...", flush=True)
-    app.run(host='127.0.0.1', port=5000, debug=False, threaded=True)
+    port = int(os.environ.get("PORT", 5000))
+    host = os.environ.get("HOST", "0.0.0.0")
+    print(f"Starting RAG Web Server on http://{host}:{port} ...", flush=True)
+    app.run(host=host, port=port, debug=False, threaded=True)
 
