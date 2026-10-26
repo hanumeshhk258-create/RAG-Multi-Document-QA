@@ -379,7 +379,7 @@ By default, Render Web Services run on ephemeral filesystems (restarting a servi
    - **Environment:** `Python`
    - **Region:** Any (e.g. Oregon, Frankfurt)
    - **Branch:** `main`
-   - **Build Command:** `pip install -r requirements.txt`
+   - **Build Command:** `pip install -r requirements.txt && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"`
    - **Start Command:** `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120`
 4. Under **Environment Variables**, add:
    - `GEMINI_API_KEY`: `<Your Real Google Gemini API Key>`
