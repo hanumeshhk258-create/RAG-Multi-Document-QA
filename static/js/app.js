@@ -191,7 +191,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? data.total_pending
                 : allDocumentsList.filter(d => (d.status || '').toLowerCase() === 'pending').length);
 
-        const selectedCount = selectedDocs.size;
+        const selectedCount = allDocumentsList.filter(d => {
+            const fn = d.filename;
+            const normName = fn.replace(/_/g, ' ');
+            const underName = fn.replace(/ /g, '_');
+            return selectedDocs.has(fn) || selectedDocs.has(normName) || selectedDocs.has(underName) || (d.document_id && selectedDocs.has(d.document_id));
+        }).length;
 
         // 1. Sidebar Navigation Badge for Documents
         const navBadge = navBadgeDocs || document.getElementById('nav-badge-docs');
@@ -209,7 +214,7 @@ document.addEventListener('DOMContentLoaded', () => {
             fileCountBadge.textContent = `${totalDocs} document${totalDocs === 1 ? '' : 's'}`;
         }
 
-        // 4. Selection Counter (e.g., "6 of 6 selected")
+        // 4. Selection Counter (e.g., "1 of 1 selected")
         if (selectedDocCount) {
             selectedDocCount.textContent = `${selectedCount} of ${totalDocs} selected`;
             if (selectedCount === 0 && totalDocs > 0) {
@@ -310,16 +315,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.toggleDocSelection = function(filename) {
-        const normName = filename.replace(/_/g, ' ');
-        const underName = filename.replace(/ /g, '_');
-        const isSel = selectedDocs.has(filename) || selectedDocs.has(normName) || selectedDocs.has(underName);
-        if (isSel) {
-            selectedDocs.delete(filename);
-            selectedDocs.delete(normName);
-            selectedDocs.delete(underName);
-        } else {
-            selectedDocs.add(filename);
-            selectedDocs.add(underName);
+        const doc = allDocumentsList.find(d => d.filename === filename || d.filename.replace(/_/g, ' ') === filename || d.filename.replace(/ /g, '_') === filename);
+        const canonName = doc ? doc.filename : filename;
+        const normName = canonName.replace(/_/g, ' ');
+        const underName = canonName.replace(/ /g, '_');
+        const isSel = selectedDocs.has(canonName) || selectedDocs.has(normName) || selectedDocs.has(underName);
+        
+        selectedDocs.delete(canonName);
+        selectedDocs.delete(normName);
+        selectedDocs.delete(underName);
+
+        if (!isSel) {
+            selectedDocs.add(canonName);
         }
         updateSelectionUI();
     };
@@ -329,7 +336,12 @@ document.addEventListener('DOMContentLoaded', () => {
         updateAllDocumentCounts();
 
         const total = allDocumentsList.length;
-        const selected = selectedDocs.size;
+        const selected = allDocumentsList.filter(d => {
+            const fn = d.filename;
+            const normName = fn.replace(/_/g, ' ');
+            const underName = fn.replace(/ /g, '_');
+            return selectedDocs.has(fn) || selectedDocs.has(normName) || selectedDocs.has(underName) || (d.document_id && selectedDocs.has(d.document_id));
+        }).length;
 
         // Update counter badge
         if (selectedDocCount) {
@@ -488,7 +500,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const savedFilename = (data.files && data.files[0]) || (data.details && data.details[0] && data.details[0].filename) || file.name;
                 showAlert(replace ? `✓ Replaced '${savedFilename}' successfully. Click 'Index Documents' to process.` : `✓ Uploaded '${savedFilename}' successfully.`, 'success');
                 selectedDocs.add(savedFilename);
-                selectedDocs.add(file.name);
                 await fetchSystemStatus();
                 btnIndex.disabled = false;
             } else {
