@@ -384,8 +384,9 @@ def get_cached_embeddings():
 import threading
 
 def _prewarm_models_background():
-    """Pre-warms the embedding model in a background thread on server startup."""
+    """Pre-warms the embedding model in a background thread after server startup to prevent port-binding starvation."""
     try:
+        time.sleep(4)
         get_cached_embeddings()
         logger.info("[STARTUP] Pre-warmed HuggingFace embedding model into memory.")
     except Exception as e:
