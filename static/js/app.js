@@ -639,14 +639,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     setSystemStatusBadge('indexing', `⏳ ${msg || 'Indexing documents...'}`);
                 }
 
-                if (job.status === 'ready' || stage === 'complete') {
+                if (job.status === 'ready' || job.status === 'completed' || stage === 'completed' || stage === 'complete') {
                     const indexedCount = job.indexed_count !== undefined ? job.indexed_count : totalDocs;
                     const chunksCount = job.total_chunks !== undefined ? job.total_chunks : 0;
                     showAlert(`✓ Successfully indexed ${indexedCount} document(s) (${chunksCount} chunks ready).`, 'success');
                     return job;
                 }
 
-                if (job.status === 'error') {
+                if (job.status === 'error' || job.status === 'failed' || stage === 'failed') {
                     const errorDetail = job.error || msg || 'Indexing operation failed.';
                     showAlert(`Indexing failed: ${errorDetail}`, 'error');
                     return job;
@@ -666,8 +666,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/index/status');
             if (res.ok) {
                 const data = await res.json();
-                if (data && data.latest_job && data.latest_job.status === 'indexing') {
-                    const job = data.latest_job;
+                const job = (data && data.latest_job) ? data.latest_job : (data && data.status === 'indexing' ? data : null);
+                if (job && job.status === 'indexing') {
                     if (!isProcessing) {
                         isProcessing = true;
                         btnIndex.disabled = true;
@@ -3615,6 +3615,11 @@ document.addEventListener('DOMContentLoaded', () => {
             updatePillStatus('pill-table', false, 'Table Extraction');
             updatePillStatus('pill-evaluation', false, 'Answer Evaluation');
             updatePillStatus('pill-correction', false, 'Answer Correction');
+
+            // Automatic self-healing re-check after 4 seconds to recover from transient restarts
+            setTimeout(() => {
+                fetchSystemStatus().catch(() => {});
+            }, 4000);
         }
     }
 

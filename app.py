@@ -1364,6 +1364,7 @@ def get_indexing_status(job_id=None):
         "failed_count": target_job.get("failed_count", 0),
         "failed_details": target_job.get("failed_details", []),
         "documents": target_job.get("documents", []),
+        "latest_job": target_job,
         "system_status": build_system_status_payload()
     })
 
