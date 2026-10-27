@@ -12,7 +12,7 @@ services:
     buildCommand: pip install -r requirements.txt && python -c "import os; os.environ['HF_HOME']='./model_cache'; os.environ['SENTENCE_TRANSFORMERS_HOME']='./model_cache'; from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='./model_cache')"
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 180
     healthCheckPath: /healthz
-    autoDeploy: false
+    autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.12
