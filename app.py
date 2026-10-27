@@ -17,9 +17,6 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_CACHE_DIR = os.environ.get("HF_HOME") or os.path.join(BASE_DIR, "model_cache")
-os.environ.setdefault("HF_HOME", MODEL_CACHE_DIR)
-os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", MODEL_CACHE_DIR)
 
 try:
     import torch
