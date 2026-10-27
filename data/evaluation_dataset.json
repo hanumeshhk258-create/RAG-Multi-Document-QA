@@ -1,162 +1,749 @@
 [
   {
-    "id": "EVAL-01",
-    "question": "What are the ACID properties in database management systems?",
-    "expected_keywords": ["atomicity", "consistency", "isolation", "durability", "transaction"],
-    "expected_source": "Database_Management_Systems.pdf",
+    "id": "EVAL-DEF-01",
+    "question": "What is SQL?",
+    "category": "definition",
+    "expected_source": "SQL_CheatSheet.pdf",
     "expected_page": 1,
-    "type": "factual"
+    "required_elements": [
+      "declarative language",
+      "relational databases"
+    ],
+    "expected_keywords": [
+      "sql",
+      "declarative",
+      "relational",
+      "databases"
+    ],
+    "type": "definition",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-02",
-    "question": "What is Atomicity and how does it protect transactions?",
-    "expected_keywords": ["atomicity", "all or nothing", "transaction", "rollback", "commit"],
-    "expected_source": "Database_Management_Systems.pdf",
+    "id": "EVAL-DEF-02",
+    "question": "What is DBMS?",
+    "category": "definition",
+    "expected_source": "DBMS_Notes.pdf",
     "expected_page": 1,
-    "type": "definition"
+    "required_elements": [
+      "database management system",
+      "software",
+      "storage",
+      "querying"
+    ],
+    "expected_keywords": [
+      "dbms",
+      "database",
+      "management",
+      "system",
+      "software"
+    ],
+    "type": "definition",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-03",
-    "question": "Explain database normalization and the difference between 1NF, 2NF, and 3NF.",
-    "expected_keywords": ["normalization", "redundancy", "1nf", "2nf", "3nf", "functional dependency"],
-    "expected_source": "Database_Management_Systems.pdf",
+    "id": "EVAL-DEF-03",
+    "question": "What is normalization?",
+    "category": "definition",
+    "expected_source": "DBMS_Notes.pdf",
     "expected_page": 2,
-    "type": "comparison"
+    "required_elements": [
+      "Normal Form",
+      "dependencies"
+    ],
+    "expected_keywords": [
+      "normalization",
+      "normal forms",
+      "dependencies"
+    ],
+    "type": "definition",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-04",
-    "question": "What is a Primary Key and how does it differ from a Foreign Key?",
-    "expected_keywords": ["primary key", "foreign key", "uniquely identifies", "referential integrity"],
-    "expected_source": "Database_Management_Systems.pdf",
+    "id": "EVAL-DEF-04",
+    "question": "What is a primary key?",
+    "category": "definition",
+    "expected_source": "DBMS_Notes.pdf",
     "expected_page": 2,
-    "type": "comparison"
+    "required_elements": [
+      "uniquely identifies",
+      "cannot contain null",
+      "unique values"
+    ],
+    "expected_keywords": [
+      "primary key",
+      "uniquely",
+      "null",
+      "unique"
+    ],
+    "type": "definition",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-05",
-    "question": "What are the common types of SQL JOIN operations?",
-    "expected_keywords": ["inner join", "left join", "right join", "full outer join", "cross join"],
-    "expected_source": "SQL_Reference_Guide.pdf",
+    "id": "EVAL-DEF-05",
+    "question": "What is SmartVest?",
+    "category": "definition",
+    "expected_source": "SmartVesrt.pdf",
     "expected_page": 1,
-    "type": "factual"
+    "required_elements": [
+      "financial advisory",
+      "investment",
+      "deterministic expert system"
+    ],
+    "expected_keywords": [
+      "smartvest",
+      "financial",
+      "advisory",
+      "expert system"
+    ],
+    "type": "definition",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-06",
-    "question": "What is the difference between DML and DDL commands in SQL?",
-    "expected_keywords": ["dml", "ddl", "select", "insert", "update", "create", "alter", "drop"],
-    "expected_source": "SQL_Reference_Guide.pdf",
-    "expected_page": 2,
-    "type": "comparison"
-  },
-  {
-    "id": "EVAL-07",
-    "question": "How does GROUP BY work with HAVING clause in SQL queries?",
-    "expected_keywords": ["group by", "having", "aggregate", "filter", "where"],
-    "expected_source": "SQL_Reference_Guide.pdf",
-    "expected_page": 3,
-    "type": "factual"
-  },
-  {
-    "id": "EVAL-08",
-    "question": "What are Python list comprehensions and how do they compare to traditional loops?",
-    "expected_keywords": ["list comprehension", "concise", "syntax", "loop", "iterable"],
-    "expected_source": "Python_Programming_Cookbook.pdf",
+    "id": "EVAL-DEF-06",
+    "question": "What is Python?",
+    "category": "definition",
+    "expected_source": "Python_Notes.pdf",
     "expected_page": 1,
-    "type": "definition"
+    "required_elements": [
+      "high-level",
+      "interpreted",
+      "readability"
+    ],
+    "expected_keywords": [
+      "python",
+      "high-level",
+      "interpreted",
+      "readability"
+    ],
+    "type": "definition",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-09",
-    "question": "Explain the Global Interpreter Lock (GIL) in Python and its impact on multithreading.",
-    "expected_keywords": ["gil", "global interpreter lock", "multithreading", "bytecode", "concurrency"],
-    "expected_source": "Python_Programming_Cookbook.pdf",
-    "expected_page": 3,
-    "type": "factual"
-  },
-  {
-    "id": "EVAL-10",
-    "question": "What is the difference between mutable and immutable data types in Python?",
-    "expected_keywords": ["mutable", "immutable", "list", "tuple", "dict", "string", "modify"],
-    "expected_source": "Python_Programming_Cookbook.pdf",
+    "id": "EVAL-ENUM-01",
+    "question": "What are the types of database keys?",
+    "category": "enumeration",
+    "expected_source": "DBMS_Notes.pdf",
     "expected_page": 2,
-    "type": "comparison"
+    "required_elements": [
+      "Primary Key",
+      "Candidate Key",
+      "Foreign Key"
+    ],
+    "unrelated_elements": [
+      "2NF",
+      "BCNF",
+      "Python",
+      "JOIN"
+    ],
+    "expected_keywords": [
+      "primary key",
+      "candidate key",
+      "foreign key"
+    ],
+    "type": "enumeration",
+    "forbidden_elements": [
+      "2NF",
+      "BCNF",
+      "Python",
+      "JOIN"
+    ],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-11",
-    "question": "Compare database transaction isolation levels with Python concurrency mechanisms.",
-    "expected_keywords": ["isolation", "concurrency", "thread", "transaction", "locking"],
-    "expected_source": "Database_Management_Systems.pdf",
+    "id": "EVAL-ENUM-02",
+    "question": "What are the four ACID properties?",
+    "category": "enumeration",
+    "expected_source": "DBMS_Notes.pdf",
     "expected_page": 1,
-    "type": "multi_document"
+    "required_elements": [
+      "Atomicity",
+      "Consistency",
+      "Isolation",
+      "Durability"
+    ],
+    "unrelated_elements": [
+      "Waterfall",
+      "Python",
+      "JOIN"
+    ],
+    "expected_keywords": [
+      "atomicity",
+      "consistency",
+      "isolation",
+      "durability"
+    ],
+    "type": "enumeration",
+    "forbidden_elements": [
+      "Waterfall",
+      "Python",
+      "JOIN"
+    ],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-12",
-    "question": "How do SQL index structures relate to Python dictionary hash maps?",
-    "expected_keywords": ["index", "b-tree", "hash", "dictionary", "lookup", "performance"],
-    "expected_source": "SQL_Reference_Guide.pdf",
+    "id": "EVAL-ENUM-02B",
+    "question": "What are ACID properties?",
+    "category": "enumeration",
+    "expected_source": "DBMS_Notes.pdf",
+    "expected_page": 1,
+    "required_elements": [
+      "Atomicity",
+      "Consistency",
+      "Isolation",
+      "Durability"
+    ],
+    "unrelated_elements": [
+      "Waterfall",
+      "Python",
+      "JOIN"
+    ],
+    "expected_keywords": [
+      "atomicity",
+      "consistency",
+      "isolation",
+      "durability"
+    ],
+    "type": "enumeration",
+    "forbidden_elements": [
+      "Waterfall",
+      "Python",
+      "JOIN"
+    ],
+    "selected_documents": [
+      "All Documents"
+    ]
+  },
+  {
+    "id": "EVAL-ENUM-03",
+    "question": "What are the types of SQL JOINs?",
+    "category": "enumeration",
+    "expected_source": "SQL_CheatSheet.pdf",
     "expected_page": 2,
-    "type": "multi_document"
+    "required_elements": [
+      "INNER JOIN",
+      "LEFT",
+      "RIGHT",
+      "FULL"
+    ],
+    "unrelated_elements": [
+      "ACID",
+      "Python",
+      "Normalization"
+    ],
+    "expected_keywords": [
+      "inner join",
+      "left",
+      "right",
+      "full"
+    ],
+    "type": "enumeration",
+    "forbidden_elements": [
+      "ACID",
+      "Python",
+      "Normalization"
+    ],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-13",
-    "question": "What SQL commands are listed in the commands reference table and what are their syntax rules?",
-    "expected_keywords": ["command", "syntax", "select", "table", "description"],
-    "expected_source": "SQL_Reference_Guide.pdf",
+    "id": "EVAL-ENUM-04",
+    "question": "What are SQL sub-languages?",
+    "category": "enumeration",
+    "expected_source": "SQL_CheatSheet.pdf",
+    "expected_page": 1,
+    "required_elements": [
+      "DDL",
+      "DML",
+      "DCL",
+      "TCL"
+    ],
+    "unrelated_elements": [
+      "Python",
+      "Waterfall"
+    ],
+    "expected_keywords": [
+      "ddl",
+      "dml",
+      "dcl",
+      "tcl"
+    ],
+    "type": "enumeration",
+    "forbidden_elements": [
+      "Python",
+      "Waterfall"
+    ],
+    "selected_documents": [
+      "All Documents"
+    ]
+  },
+  {
+    "id": "EVAL-ENUM-05",
+    "question": "What are the key data structures in Python?",
+    "category": "enumeration",
+    "expected_source": "Python_Notes.pdf",
+    "expected_page": 1,
+    "required_elements": [
+      "Lists",
+      "Tuples",
+      "Dictionaries",
+      "Sets"
+    ],
+    "unrelated_elements": [
+      "Primary Key",
+      "DDL",
+      "ACID"
+    ],
+    "expected_keywords": [
+      "lists",
+      "tuples",
+      "dictionaries",
+      "sets"
+    ],
+    "type": "enumeration",
+    "forbidden_elements": [
+      "Primary Key",
+      "DDL",
+      "ACID"
+    ],
+    "selected_documents": [
+      "All Documents"
+    ]
+  },
+  {
+    "id": "EVAL-EXP-01",
+    "question": "Explain DBMS and its key characteristics.",
+    "category": "explanation",
+    "expected_source": "DBMS_Notes.pdf",
+    "expected_page": 1,
+    "required_elements": [
+      "software",
+      "creation",
+      "storage",
+      "querying",
+      "data redundancy",
+      "concurrent access"
+    ],
+    "expected_keywords": [
+      "dbms",
+      "database",
+      "redundancy",
+      "concurrent",
+      "integrity"
+    ],
+    "type": "explanation",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
+  },
+  {
+    "id": "EVAL-EXP-02",
+    "question": "Explain normalization.",
+    "category": "explanation",
+    "expected_source": "DBMS_Notes.pdf",
     "expected_page": 2,
-    "type": "table"
+    "required_elements": [
+      "normal forms",
+      "1NF",
+      "2NF",
+      "3NF"
+    ],
+    "unrelated_elements": [
+      "Python",
+      "Key Data Structures"
+    ],
+    "expected_keywords": [
+      "normalization",
+      "1nf",
+      "2nf",
+      "3nf"
+    ],
+    "type": "explanation",
+    "forbidden_elements": [
+      "Python",
+      "Key Data Structures"
+    ],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-14",
-    "question": "In the normalization process, which normal form addresses transitive dependencies and what preceding condition must be met?",
-    "expected_keywords": ["3nf", "third normal form", "transitive dependency", "2nf", "second normal form"],
-    "expected_source": "Database_Management_Systems.pdf",
+    "id": "EVAL-EXP-03",
+    "question": "Explain SQL JOINs.",
+    "category": "explanation",
+    "expected_source": "SQL_CheatSheet.pdf",
     "expected_page": 2,
-    "type": "multi_hop"
+    "required_elements": [
+      "matching values",
+      "tables",
+      "INNER",
+      "LEFT"
+    ],
+    "expected_keywords": [
+      "joins",
+      "tables",
+      "matching",
+      "inner"
+    ],
+    "type": "explanation",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-15",
-    "question": "What are the exact hardware requirements and server rack specifications for running the database cluster?",
-    "expected_keywords": [],
+    "id": "EVAL-EXP-04",
+    "question": "Explain Python Decorators.",
+    "category": "explanation",
+    "expected_source": "Python_Notes.pdf",
+    "expected_page": 2,
+    "required_elements": [
+      "behavior",
+      "without modifying",
+      "source code",
+      "@"
+    ],
+    "expected_keywords": [
+      "decorator",
+      "decorators",
+      "@",
+      "behavior"
+    ],
+    "type": "explanation",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
+  },
+  {
+    "id": "EVAL-EXP-05",
+    "question": "Explain the second ACID property.",
+    "category": "explanation",
+    "expected_source": "DBMS_Notes.pdf",
+    "expected_page": 1,
+    "required_elements": [
+      "Consistency",
+      "valid state"
+    ],
+    "unrelated_elements": [
+      "Python",
+      "Waterfall",
+      "JOIN"
+    ],
+    "expected_keywords": [
+      "consistency",
+      "valid state",
+      "transaction"
+    ],
+    "type": "explanation",
+    "forbidden_elements": [
+      "Python",
+      "Waterfall",
+      "JOIN"
+    ],
+    "selected_documents": [
+      "DBMS_Notes.pdf"
+    ]
+  },
+  {
+    "id": "EVAL-FU-01",
+    "question": "What is Durability?",
+    "category": "follow_up",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "What are ACID properties?"
+      },
+      {
+        "role": "assistant",
+        "content": "ACID properties in DBMS are Atomicity, Consistency, Isolation, and Durability."
+      }
+    ],
+    "expected_source": "DBMS_Notes.pdf",
+    "expected_page": 1,
+    "required_elements": [
+      "committed",
+      "permanent"
+    ],
+    "unrelated_elements": [
+      "Python",
+      "Waterfall",
+      "JOIN"
+    ],
+    "expected_keywords": [
+      "durability",
+      "committed",
+      "permanently",
+      "persistent"
+    ],
+    "type": "follow_up",
+    "forbidden_elements": [
+      "Python",
+      "Waterfall",
+      "JOIN"
+    ],
+    "selected_documents": [
+      "All Documents"
+    ]
+  },
+  {
+    "id": "EVAL-FU-02",
+    "question": "What are its characteristics?",
+    "category": "follow_up",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "What is a primary key?"
+      },
+      {
+        "role": "assistant",
+        "content": "A primary key is a column or set of columns that uniquely identifies each row in a database table."
+      }
+    ],
+    "expected_source": "DBMS_Notes.pdf",
+    "expected_page": 2,
+    "required_elements": [
+      "cannot contain null",
+      "unique values"
+    ],
+    "expected_keywords": [
+      "null",
+      "unique",
+      "values"
+    ],
+    "type": "follow_up",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
+  },
+  {
+    "id": "EVAL-COMP-01",
+    "question": "Compare primary key and foreign key.",
+    "category": "comparison",
+    "expected_source": "DBMS_Notes.pdf",
+    "expected_page": 2,
+    "required_elements": [
+      "primary key",
+      "foreign key",
+      "uniquely identifies",
+      "referencing"
+    ],
+    "expected_keywords": [
+      "primary key",
+      "foreign key",
+      "referential",
+      "uniquely"
+    ],
+    "type": "comparison",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "DBMS_Notes.pdf"
+    ]
+  },
+  {
+    "id": "EVAL-COMP-02",
+    "question": "Compare DDL and DML commands in SQL.",
+    "category": "comparison",
+    "expected_source": "SQL_CheatSheet.pdf",
+    "expected_page": 1,
+    "required_elements": [
+      "DDL",
+      "DML",
+      "definition",
+      "manipulation"
+    ],
+    "expected_keywords": [
+      "ddl",
+      "dml",
+      "definition",
+      "manipulation"
+    ],
+    "type": "comparison",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "SQL_CheatSheet.pdf"
+    ]
+  },
+  {
+    "id": "EVAL-COMP-03",
+    "question": "Compare SQL and Python roles in CommerceOS architecture.",
+    "category": "comparison",
+    "expected_source": "CommerceOS_Complete_Project_Report.pdf",
+    "expected_page": 2,
+    "required_elements": [
+      "SQL",
+      "Python",
+      "Analytics",
+      "Ingestion"
+    ],
+    "expected_keywords": [
+      "sql",
+      "python",
+      "commerceos",
+      "analytics",
+      "ingestion"
+    ],
+    "type": "comparison",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "CommerceOS_Complete_Project_Report.pdf"
+    ]
+  },
+  {
+    "id": "EVAL-UNSUP-01",
+    "question": "What is quantum gravity in astrophysics?",
+    "category": "unsupported",
     "expected_source": null,
     "expected_page": null,
-    "type": "insufficient_evidence"
+    "required_elements": [
+      "couldn't find",
+      "sufficient information"
+    ],
+    "expected_keywords": [],
+    "type": "unsupported",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-16",
-    "question": "What is the quarterly revenue and dividend payout policy for the company?",
-    "expected_keywords": [],
+    "id": "EVAL-UNSUP-02",
+    "question": "Explain cellular mitosis stages in plant biology.",
+    "category": "unsupported",
     "expected_source": null,
     "expected_page": null,
-    "type": "insufficient_evidence"
+    "required_elements": [
+      "couldn't find",
+      "sufficient information"
+    ],
+    "expected_keywords": [],
+    "type": "unsupported",
+    "forbidden_elements": [],
+    "unrelated_elements": [],
+    "selected_documents": [
+      "All Documents"
+    ]
   },
   {
-    "id": "EVAL-17",
-    "question": "How do you prepare a traditional Italian Margherita pizza dough?",
-    "expected_keywords": [],
+    "id": "EVAL-FILT-01",
+    "question": "What is SQL?",
+    "category": "filtering",
+    "selected_documents": [
+      "SQL_CheatSheet.pdf"
+    ],
+    "expected_source": "SQL_CheatSheet.pdf",
+    "expected_page": 1,
+    "excluded_documents": [
+      "DBMS_Notes.pdf",
+      "Python_Notes.pdf"
+    ],
+    "required_elements": [
+      "declarative language",
+      "relational databases"
+    ],
+    "expected_keywords": [
+      "sql",
+      "declarative",
+      "relational"
+    ],
+    "type": "filtering",
+    "forbidden_elements": [],
+    "unrelated_elements": []
+  },
+  {
+    "id": "EVAL-FILT-02",
+    "question": "What are the types of database keys?",
+    "category": "filtering",
+    "selected_documents": [
+      "Python_Notes.pdf"
+    ],
     "expected_source": null,
     "expected_page": null,
-    "type": "out_of_scope"
-  },
-  {
-    "id": "EVAL-18",
-    "question": "What are the atmospheric dynamics and surface temperature of Kepler-452b?",
+    "excluded_documents": [
+      "DBMS_Notes.pdf"
+    ],
+    "required_elements": [
+      "couldn't find",
+      "not contain enough information",
+      "not provide"
+    ],
     "expected_keywords": [],
-    "expected_source": null,
-    "expected_page": null,
-    "type": "out_of_scope"
+    "expected_fallback": true,
+    "type": "filtering",
+    "forbidden_elements": [],
+    "unrelated_elements": []
   },
   {
-    "id": "EVAL-19",
-    "question": "What is Boyce-Codd Normal Form (BCNF) and when is it required?",
-    "expected_keywords": ["bcnf", "boyce codd", "normal form", "determinant", "candidate key"],
-    "expected_source": "Database_Management_Systems.pdf",
+    "id": "EVAL-FILT-03",
+    "question": "What are the types of database keys?",
+    "category": "filtering",
+    "selected_documents": [
+      "DBMS_Notes.pdf"
+    ],
+    "expected_source": "DBMS_Notes.pdf",
     "expected_page": 2,
-    "type": "definition"
-  },
-  {
-    "id": "EVAL-20",
-    "question": "Compare relational database schema design with object-oriented class hierarchies.",
-    "expected_keywords": ["relational", "schema", "table", "class", "object", "inheritance"],
-    "expected_source": "Database_Management_Systems.pdf",
-    "expected_page": 2,
-    "type": "comparison"
+    "excluded_documents": [
+      "SQL_CheatSheet.pdf",
+      "Python_Notes.pdf"
+    ],
+    "required_elements": [
+      "Primary Key",
+      "Candidate Key",
+      "Foreign Key"
+    ],
+    "unrelated_elements": [
+      "Python",
+      "2NF",
+      "BCNF"
+    ],
+    "expected_keywords": [
+      "primary key",
+      "candidate key",
+      "foreign key"
+    ],
+    "type": "filtering",
+    "forbidden_elements": [
+      "Python",
+      "2NF",
+      "BCNF"
+    ]
   }
 ]

@@ -274,7 +274,11 @@ document.addEventListener('DOMContentLoaded', () => {
     window.updateAllDocumentCounts = updateAllDocumentCounts;
 
     // Initialize System Status on load
-    fetchSystemStatus();
+    fetchSystemStatus().then(() => {
+        if (typeof checkForActiveIndexingJob === 'function') {
+            checkForActiveIndexingJob();
+        }
+    });
 
     // =========================================================================
     // 1. SMART DOCUMENT SELECTION HANDLERS
@@ -306,10 +310,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.toggleDocSelection = function(filename) {
-        if (selectedDocs.has(filename)) {
+        const normName = filename.replace(/_/g, ' ');
+        const underName = filename.replace(/ /g, '_');
+        const isSel = selectedDocs.has(filename) || selectedDocs.has(normName) || selectedDocs.has(underName);
+        if (isSel) {
             selectedDocs.delete(filename);
+            selectedDocs.delete(normName);
+            selectedDocs.delete(underName);
         } else {
             selectedDocs.add(filename);
+            selectedDocs.add(underName);
         }
         updateSelectionUI();
     };
@@ -372,24 +382,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return str.replace(/[^a-zA-Z0-9_-]/g, '_');
     }
 
-    // =========================================================================
-    // 2. DRAG & DROP AND MULTI-PDF UPLOAD
-    // =========================================================================
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.classList.add('dragover');
-        });
-    });
-
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.classList.remove('dragover');
-        });
-    });
 
     // =========================================================================
     // 2. DRAG & DROP AND MULTI-PDF UPLOAD WITH DUPLICATE HANDLING
@@ -493,7 +485,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (data.success) {
-                showAlert(replace ? `✓ Replaced '${file.name}' successfully. Click 'Index Documents' to process.` : `✓ Uploaded '${file.name}' successfully.`, 'success');
+                const savedFilename = (data.files && data.files[0]) || (data.details && data.details[0] && data.details[0].filename) || file.name;
+                showAlert(replace ? `✓ Replaced '${savedFilename}' successfully. Click 'Index Documents' to process.` : `✓ Uploaded '${savedFilename}' successfully.`, 'success');
+                selectedDocs.add(savedFilename);
                 selectedDocs.add(file.name);
                 await fetchSystemStatus();
                 btnIndex.disabled = false;
@@ -591,20 +585,116 @@ document.addEventListener('DOMContentLoaded', () => {
     btnIndex.addEventListener('click', () => runIndexingProcess(false));
     btnRebuild.addEventListener('click', () => runIndexingProcess(true));
 
+    async function pollIndexingJob(jobId, isRebuild, totalDocs) {
+        let attempts = 0;
+        const maxAttempts = 300; // 5 minutes max
+        let consecutiveErrors = 0;
+
+        while (attempts < maxAttempts) {
+            attempts++;
+            await new Promise(r => setTimeout(r, 1000));
+
+            try {
+                const res = await fetch(`/api/index/status/${jobId}`);
+                if (!res.ok) {
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= 5) {
+                        throw new Error(`Status polling failed with HTTP ${res.status}`);
+                    }
+                    continue;
+                }
+                consecutiveErrors = 0;
+                const job = await res.json();
+                if (!job || !job.success) continue;
+
+                const stage = job.stage || 'indexing';
+                const progressPct = Math.round((job.progress || 0) * 100);
+                const msg = job.message || '';
+
+                if (stage === 'extracting') {
+                    btnIndexText.textContent = `Extracting (${progressPct}%)...`;
+                    setSystemStatusBadge('indexing', `📖 Extracting text (${progressPct}%)...`);
+                } else if (stage === 'chunking') {
+                    btnIndexText.textContent = `Chunking (${progressPct}%)...`;
+                    setSystemStatusBadge('indexing', `✂️ Chunking text (${progressPct}%)...`);
+                } else if (stage === 'embedding') {
+                    btnIndexText.textContent = `Embedding (${progressPct}%)...`;
+                    setSystemStatusBadge('indexing', `🧠 Generating embeddings (${progressPct}%)...`);
+                } else if (stage === 'indexing') {
+                    btnIndexText.textContent = `Indexing (${progressPct}%)...`;
+                    setSystemStatusBadge('indexing', `⚡ Updating vector index (${progressPct}%)...`);
+                } else {
+                    btnIndexText.textContent = isRebuild ? 'Rebuilding...' : `Indexing (${progressPct}%)...`;
+                    setSystemStatusBadge('indexing', `⏳ ${msg || 'Indexing documents...'}`);
+                }
+
+                if (job.status === 'ready' || stage === 'complete') {
+                    const indexedCount = job.indexed_count !== undefined ? job.indexed_count : totalDocs;
+                    const chunksCount = job.total_chunks !== undefined ? job.total_chunks : 0;
+                    showAlert(`✓ Successfully indexed ${indexedCount} document(s) (${chunksCount} chunks ready).`, 'success');
+                    return job;
+                }
+
+                if (job.status === 'error') {
+                    const errorDetail = job.error || msg || 'Indexing operation failed.';
+                    showAlert(`Indexing failed: ${errorDetail}`, 'error');
+                    return job;
+                }
+            } catch (pollErr) {
+                consecutiveErrors++;
+                if (consecutiveErrors >= 5) {
+                    throw pollErr;
+                }
+            }
+        }
+        throw new Error('Indexing job polling timed out after 5 minutes.');
+    }
+
+    async function checkForActiveIndexingJob() {
+        try {
+            const res = await fetch('/api/index/status');
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.latest_job && data.latest_job.status === 'indexing') {
+                    const job = data.latest_job;
+                    if (!isProcessing) {
+                        isProcessing = true;
+                        btnIndex.disabled = true;
+                        btnRebuild.disabled = true;
+                        btnIndexText.textContent = 'Indexing...';
+                        setSystemStatusBadge('indexing', `⏳ ${job.message || 'Indexing in progress...'}`);
+                        pollIndexingJob(job.job_id, false, (job.target_documents || []).length).finally(async () => {
+                            isProcessing = false;
+                            await fetchSystemStatus();
+                            btnIndex.disabled = false;
+                            btnRebuild.disabled = false;
+                            btnIndexText.textContent = 'Index Documents';
+                        });
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+
     async function runIndexingProcess(isRebuild = false) {
         if (isProcessing) return;
+        isProcessing = true;
 
         const pendingOrErrorDocs = allDocumentsList.filter(d => {
             if (isRebuild) return true;
             if (selectedDocs.size > 0) {
-                return selectedDocs.has(d.filename) && (d.status === 'Pending' || d.status === 'Error' || !d.indexed);
+                const normName = d.filename.replace(/_/g, ' ');
+                const underName = d.filename.replace(/ /g, '_');
+                const isSel = selectedDocs.has(d.filename) || selectedDocs.has(normName) || selectedDocs.has(underName) || (d.document_id && selectedDocs.has(d.document_id));
+                return isSel && (d.status === 'Pending' || d.status === 'Error' || d.status === 'Indexing' || !d.indexed);
             }
-            return d.status === 'Pending' || d.status === 'Error' || !d.indexed;
+            return d.status === 'Pending' || d.status === 'Error' || d.status === 'Indexing' || !d.indexed;
         });
 
         const totalToIndex = pendingOrErrorDocs.length;
         if (!isRebuild && totalToIndex === 0) {
             showAlert('All selected documents are already indexed and Ready.', 'info');
+            isProcessing = false;
             return;
         }
 
@@ -633,27 +723,52 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            const endpoint = isRebuild ? '/api/rebuild' : '/api/index';
-            const payload = isRebuild ? {} : { selected_documents: Array.from(selectedDocs) };
+            const endpoint = isRebuild ? '/api/rebuild?async=true' : '/api/index?async=true';
+            const expandedSelected = new Set();
+            selectedDocs.forEach(name => {
+                expandedSelected.add(name);
+                expandedSelected.add(name.replace(/ /g, '_'));
+                expandedSelected.add(name.replace(/_/g, ' '));
+            });
+            const payload = isRebuild ? {} : { selected_documents: Array.from(expandedSelected) };
 
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            const data = await response.json();
 
-            if (data.success) {
+            let data;
+            const responseText = await response.text();
+            try {
+                data = JSON.parse(responseText);
+            } catch (jsonErr) {
+                data = null;
+            }
+
+            if ((response.status === 202 || (data && data.async)) && data && data.job_id) {
+                // Asynchronous background indexing started - poll for progress
+                await pollIndexingJob(data.job_id, isRebuild, totalToIndex);
+            } else if (response.ok && data && data.success) {
                 const countIndexed = data.indexed_count !== undefined ? data.indexed_count : (data.documents || 0);
                 const msg = data.message || `${countIndexed} document(s) indexed successfully.`;
                 showAlert(`✓ ${msg}`, 'success');
+            } else if (data && (data.error || data.message)) {
+                showAlert(data.error || data.message, 'error');
+            } else if (!response.ok) {
+                showAlert(`Indexing failed (Server HTTP ${response.status}: ${response.statusText || 'Error'}). Please retry.`, 'error');
             } else {
-                showAlert(data.error || 'Failed to index documents.', 'error');
+                showAlert('Failed to index documents.', 'error');
             }
         } catch (err) {
-            showAlert('Network error during document indexing.', 'error');
+            const isAbort = (err && err.name === 'AbortError');
+            const errDetail = isAbort 
+                ? 'Request timed out. The server may still be processing in the background.'
+                : ((err && err.message) ? err.message : 'Network error during document indexing.');
+            showAlert(`Document indexing failed: ${errDetail}`, 'error');
             console.error('Indexing error:', err);
         } finally {
+            isProcessing = false;
             await fetchSystemStatus();
             btnIndex.disabled = false;
             btnRebuild.disabled = false;
@@ -3420,10 +3535,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 selectedDocs.clear();
                 initialSelectionLoaded = false;
             } else {
-                // Prune any removed documents from selectedDocs
-                const availableFiles = new Set(allDocumentsList.map(d => d.filename));
+                // Prune any removed documents from selectedDocs with space/underscore tolerance
+                const availableNormalized = new Set();
+                allDocumentsList.forEach(d => {
+                    availableNormalized.add(d.filename);
+                    availableNormalized.add(d.filename.replace(/_/g, ' '));
+                    availableNormalized.add(d.filename.replace(/ /g, '_'));
+                    if (d.document_id) availableNormalized.add(d.document_id);
+                });
                 for (const sf of Array.from(selectedDocs)) {
-                    if (!availableFiles.has(sf)) {
+                    if (!availableNormalized.has(sf)) {
                         selectedDocs.delete(sf);
                     }
                 }
@@ -3449,8 +3570,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const readyCount = data.total_indexed !== undefined ? data.total_indexed : (data.indexed_count !== undefined ? data.indexed_count : (data.indexed_documents ? data.indexed_documents.length : 0));
             const pendingCount = data.total_pending !== undefined ? data.total_pending : (data.pending_count !== undefined ? data.pending_count : 0);
+            const indexingCount = data.indexing_count !== undefined ? data.indexing_count : (data.documents ? data.documents.filter(d => d.status === 'Indexing').length : 0);
 
-            if (data.vectorstore_ready && data.total_chunks > 0 && readyCount > 0) {
+            if (isProcessing || indexingCount > 0) {
+                setSystemStatusBadge('indexing', `⏳ Indexing in progress...`);
+            } else if (data.vectorstore_ready && data.total_chunks > 0 && readyCount > 0) {
                 isVectorstoreReady = true;
                 setSystemStatusBadge('ready', '🟢 Ready');
                 btnIndex.disabled = false;
@@ -3527,7 +3651,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 statusLabel = 'Indexing failed';
             }
 
-            const isSelected = selectedDocs.has(doc.filename);
+            const normName = doc.filename.replace(/_/g, ' ');
+            const underName = doc.filename.replace(/ /g, '_');
+            const isSelected = selectedDocs.has(doc.filename) || 
+                               selectedDocs.has(normName) || 
+                               selectedDocs.has(underName) || 
+                               (doc.document_id && selectedDocs.has(doc.document_id));
             const safeId = sanitizeId(doc.filename);
             const docId = doc.document_id || `doc_${doc.filename}`;
             const pagesVal = doc.pages || 1;

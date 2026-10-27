@@ -35,6 +35,7 @@ analytics.db
 *.sqlite
 *.sqlite3
 test_vectorstore/
+model_cache/
 scratch/
 *.tmp
 
@@ -47,3 +48,10 @@ scratch/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Evaluation & Benchmark Outputs
+baseline_results.json
+benchmark_results.json
+evaluation_report.csv
+evaluation_results.json
+optimized_results.json

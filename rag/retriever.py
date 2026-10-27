@@ -4,6 +4,22 @@ import math
 import time
 import logging
 
+# Optimize CPU thread allocation to prevent throttling on container environments
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_CACHE_DIR = os.environ.get("HF_HOME") or os.path.join(BASE_DIR, "model_cache")
+os.environ.setdefault("HF_HOME", MODEL_CACHE_DIR)
+os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", MODEL_CACHE_DIR)
+
+try:
+    import torch
+    torch.set_num_threads(1)
+except Exception:
+    pass
+
 # Enable HuggingFace offline mode only if explicitly configured
 if os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1", "yes"):
     os.environ["HF_HUB_OFFLINE"] = "1"
@@ -213,7 +229,10 @@ class CrossEncoderManager:
         self._initialized = True
         try:
             from sentence_transformers import CrossEncoder
-            self._model = CrossEncoder(self.model_name)
+            try:
+                self._model = CrossEncoder(self.model_name, cache_folder=MODEL_CACHE_DIR, local_files_only=True)
+            except Exception:
+                self._model = CrossEncoder(self.model_name, cache_folder=MODEL_CACHE_DIR)
             self._available = True
             logger.info(f"CrossEncoder model '{self.model_name}' initialized successfully.")
         except Exception as err:

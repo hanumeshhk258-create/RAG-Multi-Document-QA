@@ -379,12 +379,15 @@ By default, Render Web Services run on ephemeral filesystems (restarting a servi
    - **Environment:** `Python`
    - **Region:** Any (e.g. Oregon, Frankfurt)
    - **Branch:** `main`
-   - **Build Command:** `pip install -r requirements.txt && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"`
-   - **Start Command:** `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120`
+   - **Build Command:** `pip install -r requirements.txt && python -c "import os; os.environ['HF_HOME']='./model_cache'; os.environ['SENTENCE_TRANSFORMERS_HOME']='./model_cache'; from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder='./model_cache')"`
+   - **Start Command:** `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 180`
 4. Under **Environment Variables**, add:
    - `GEMINI_API_KEY`: `<Your Real Google Gemini API Key>`
    - `GEMINI_MODEL`: `gemini-3.5-flash-lite`
    - `PYTHON_VERSION`: `3.10.12`
+   - `HF_HOME`: `./model_cache`
+   - `SENTENCE_TRANSFORMERS_HOME`: `./model_cache`
+   - `OMP_NUM_THREADS`: `1`
    - `RAG_DATA_DIR`: `/var/data` *(if disk attached, else leave blank)*
 5. Under **Advanced**, set **Health Check Path** to `/healthz`.
 6. Click **Create Web Service**.

@@ -2,11 +2,30 @@ import os
 import re
 import time
 import glob
+import json
+import uuid
 import shutil
 import logging
 import hashlib
+import threading
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Any, Set
+
+# Optimize CPU thread allocation to prevent throttling on container environments
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_CACHE_DIR = os.environ.get("HF_HOME") or os.path.join(BASE_DIR, "model_cache")
+os.environ.setdefault("HF_HOME", MODEL_CACHE_DIR)
+os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", MODEL_CACHE_DIR)
+
+try:
+    import torch
+    torch.set_num_threads(1)
+except Exception:
+    pass
 
 # Enable HuggingFace offline mode only if explicitly configured
 if os.environ.get("OFFLINE_MODE", "").lower() in ("true", "1", "yes"):
@@ -129,6 +148,55 @@ DOCUMENT_SEARCH_CACHE = {}
 
 # Full RAG Pipeline Response Cache (normalized_query, selected_docs_tuple, index_version) -> response_dict
 RAG_RESPONSE_CACHE = {}
+
+# Thread-safe indexing lock to prevent concurrent indexing corruption (Phase 7)
+INDEXING_LOCK = threading.Lock()
+
+# Persistent and in-memory indexing jobs registry (Phase 3)
+INDEXING_JOBS_FILE = os.path.join(VECTORSTORE_DIR, "indexing_jobs.json")
+ACTIVE_INDEXING_JOBS: Dict[str, Dict[str, Any]] = {}
+CURRENT_INDEXING_FILES: Set[str] = set()
+
+
+def _load_indexing_jobs() -> Dict[str, Dict[str, Any]]:
+    """Loads active/recent indexing jobs from disk."""
+    global ACTIVE_INDEXING_JOBS
+    jobs_file = os.path.join(VECTORSTORE_DIR, "indexing_jobs.json")
+    if os.path.exists(jobs_file):
+        try:
+            if os.path.getsize(jobs_file) > 0:
+                with open(jobs_file, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                    if isinstance(saved, dict):
+                        ACTIVE_INDEXING_JOBS.update(saved)
+        except Exception as e:
+            logger.warning(f"Failed to load indexing jobs file: {e}")
+    return ACTIVE_INDEXING_JOBS
+
+
+def _save_indexing_job(job_data: Dict[str, Any]):
+    """Persists job status update to memory and disk safely."""
+    global ACTIVE_INDEXING_JOBS
+    job_id = job_data.get("job_id")
+    if not job_id:
+        return
+    ACTIVE_INDEXING_JOBS[job_id] = job_data
+    if len(ACTIVE_INDEXING_JOBS) > 25:
+        keys = sorted(ACTIVE_INDEXING_JOBS.keys())
+        for k in keys[:-25]:
+            ACTIVE_INDEXING_JOBS.pop(k, None)
+    jobs_file = os.path.join(VECTORSTORE_DIR, "indexing_jobs.json")
+    try:
+        os.makedirs(VECTORSTORE_DIR, exist_ok=True)
+        with open(jobs_file, "w", encoding="utf-8") as f:
+            json.dump(ACTIVE_INDEXING_JOBS, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save indexing jobs: {e}")
+
+
+def get_currently_indexing_files() -> Set[str]:
+    """Returns the set of filenames currently undergoing active background indexing."""
+    return set(CURRENT_INDEXING_FILES)
 
 
 def clear_search_cache():
@@ -313,6 +381,19 @@ def get_cached_embeddings():
     return embedding_model
 
 
+import threading
+
+def _prewarm_models_background():
+    """Pre-warms the embedding model in a background thread on server startup."""
+    try:
+        get_cached_embeddings()
+        logger.info("[STARTUP] Pre-warmed HuggingFace embedding model into memory.")
+    except Exception as e:
+        logger.warning(f"[STARTUP] Notice during embedding model pre-warm: {e}")
+
+threading.Thread(target=_prewarm_models_background, daemon=True).start()
+
+
 def get_active_vectorstore():
     """Returns cached active vector store from memory or loads from disk if index exists."""
     global active_vectorstore
@@ -356,7 +437,11 @@ def build_system_status_payload():
         is_configured = is_valid_api_key_format(api_key)
         model_name = get_configured_model_name()
 
-        meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
+        meta = load_vectorstore_metadata(
+            VECTORSTORE_DIR,
+            docs_dir=DOCUMENTS_DIR,
+            active_indexing_filenames=get_currently_indexing_files()
+        )
 
         doc_info_list = meta.get("documents_info", [])
         ready_docs = [d["filename"] for d in doc_info_list if d.get("status") == "Ready"]
@@ -731,25 +816,332 @@ def upload_files():
 
 
 # =============================================================================
-# 4. DOCUMENT INDEXING & REBUILD ENDPOINTS
+# 4. DOCUMENT INDEXING & REBUILD ENDPOINTS (ASYNC BACKGROUND WORKER & INCREMENTAL)
 # =============================================================================
+
+def _execute_indexing_core(
+    to_index: List[str],
+    is_rebuild: bool = False,
+    job_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Executes the core document extraction, chunking, incremental FAISS embedding,
+    BM25 invalidation, and metadata persistence.
+    """
+    global active_vectorstore, CURRENT_INDEXING_FILES
+
+    t_start = time.perf_counter()
+    logger.info(f"[INDEX_CORE] Starting indexing for {len(to_index)} document(s) (rebuild={is_rebuild}, job={job_id})...")
+
+    meta = load_vectorstore_metadata(
+        VECTORSTORE_DIR,
+        docs_dir=DOCUMENTS_DIR,
+        active_indexing_filenames=set(to_index)
+    )
+    doc_info_map = {d["filename"]: d for d in meta.get("documents_info", [])}
+
+    job_record = None
+    if job_id:
+        job_record = ACTIVE_INDEXING_JOBS.get(job_id) or {
+            "job_id": job_id,
+            "status": "indexing",
+            "stage": "extracting",
+            "progress": 10,
+            "message": f"Extracting text for {len(to_index)} document(s)...",
+            "documents": to_index,
+            "indexed_count": 0,
+            "failed_count": 0,
+            "failed_details": [],
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        _save_indexing_job(job_record)
+
+    # Set status to Indexing in metadata immediately
+    for fname in to_index:
+        if fname in doc_info_map:
+            doc_info_map[fname]["status"] = "Indexing"
+            doc_info_map[fname]["error_message"] = None
+    meta["documents_info"] = list(doc_info_map.values())
+    _save_metadata_dict(VECTORSTORE_DIR, meta)
+
+    successfully_indexed = []
+    failed_docs = []
+    new_chunks_to_add = []
+
+    try:
+        total_docs_count = max(1, len(to_index))
+        for idx, fname in enumerate(to_index):
+            fpath = os.path.join(DOCUMENTS_DIR, fname)
+            f_hash = compute_file_hash(fpath) if os.path.exists(fpath) else ""
+
+            if job_record:
+                job_record["stage"] = "extracting"
+                job_record["progress"] = 10 + int(30 * (idx / total_docs_count))
+                job_record["message"] = f"Extracting text from '{fname}' ({idx + 1}/{total_docs_count})..."
+                job_record["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                _save_indexing_job(job_record)
+
+            try:
+                if not os.path.exists(fpath):
+                    raise FileNotFoundError(f"Document file '{fname}' not found on disk.")
+
+                raw_docs, warnings = load_pdf_file(fpath, fname)
+                if not raw_docs:
+                    raise ValueError("Could not extract any text from document (scanned or image-only PDF; OCR may be required).")
+
+                # Verify text content is not completely blank
+                total_text_len = sum(len(d.page_content.strip()) for d in raw_docs)
+                if total_text_len == 0:
+                    raise ValueError("Document contains 0 readable characters (scanned images or empty document). OCR may be required.")
+
+                if job_record:
+                    job_record["stage"] = "chunking"
+                    job_record["progress"] = 30 + int(20 * (idx / total_docs_count))
+                    job_record["message"] = f"Chunking text for '{fname}'..."
+                    job_record["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    _save_indexing_job(job_record)
+
+                doc_pages = raw_docs[0].metadata.get("total_pages", len(raw_docs))
+                doc_chunks = split_documents(raw_docs)
+                if not doc_chunks:
+                    raise ValueError("No text chunks could be generated from document content.")
+
+                doc_id = (doc_info_map.get(fname) or {}).get("document_id") or f"doc_{f_hash[:12]}"
+                for c in doc_chunks:
+                    c.metadata["document_id"] = doc_id
+                    c.metadata["document"] = fname
+                    c.metadata["source"] = fname
+                    c.metadata["file_hash"] = f_hash
+
+                if fname in doc_info_map:
+                    doc_info_map[fname]["document_id"] = doc_id
+                    doc_info_map[fname]["file_hash"] = f_hash
+                    doc_info_map[fname]["status"] = "Ready"
+                    doc_info_map[fname]["chunks"] = len(doc_chunks)
+                    doc_info_map[fname]["pages"] = doc_pages
+                    doc_info_map[fname]["indexed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    doc_info_map[fname]["error_message"] = None
+
+                successfully_indexed.append(fname)
+                new_chunks_to_add.extend(doc_chunks)
+                logger.info(f"[INDEX_CORE] Processed '{fname}': {doc_pages} pages, {len(doc_chunks)} chunks.")
+
+            except Exception as err:
+                logger.error(f"[INDEX_CORE] Failed for '{fname}': {err}")
+                if fname in doc_info_map:
+                    doc_info_map[fname]["status"] = "Error"
+                    doc_info_map[fname]["chunks"] = 0
+                    doc_info_map[fname]["error_message"] = str(err)
+                failed_docs.append({"filename": fname, "error": str(err)})
+
+        # Stage: Vectorstore embedding and indexing
+        if job_record:
+            job_record["stage"] = "embedding"
+            job_record["progress"] = 65
+            job_record["message"] = f"Generating vector embeddings for {len(new_chunks_to_add)} chunk(s)..."
+            job_record["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            _save_indexing_job(job_record)
+
+        if active_vectorstore is None:
+            active_vectorstore = get_active_vectorstore()
+
+        if is_rebuild or active_vectorstore is None:
+            # Full rebuild or initial build from all Ready documents
+            all_ready_chunks = []
+            ready_doc_names = []
+            total_pages = 0
+
+            for fname, doc_entry in doc_info_map.items():
+                if doc_entry.get("status") == "Ready":
+                    fpath = os.path.join(DOCUMENTS_DIR, fname)
+                    if os.path.exists(fpath):
+                        r_docs, _ = load_pdf_file(fpath, fname)
+                        if r_docs:
+                            doc_chunks = split_documents(r_docs)
+                            doc_entry["chunks"] = len(doc_chunks)
+                            doc_id = doc_entry.get("document_id") or f"doc_{fname}"
+                            for c in doc_chunks:
+                                c.metadata["document_id"] = doc_id
+                                c.metadata["document"] = fname
+                                c.metadata["source"] = fname
+                                c.metadata["file_hash"] = doc_entry.get("file_hash", "")
+                            all_ready_chunks.extend(doc_chunks)
+                            ready_doc_names.append(fname)
+                            total_pages += doc_entry.get("pages", len(r_docs))
+
+            if all_ready_chunks:
+                emb = get_cached_embeddings()
+                if emb is None:
+                    raise RuntimeError("Failed to initialize HuggingFace embedding model. Please check disk space and environment configuration.")
+                vectorstore = build_vectorstore(
+                    chunks=all_ready_chunks,
+                    embedding_model=emb,
+                    doc_names=ready_doc_names,
+                    documents_info=[doc_info_map[f] for f in ready_doc_names],
+                    total_pages=total_pages
+                )
+                save_vectorstore(
+                    vectorstore=vectorstore,
+                    folder_path=VECTORSTORE_DIR,
+                    doc_names=ready_doc_names,
+                    total_chunks=len(all_ready_chunks),
+                    documents_info=list(doc_info_map.values()),
+                    total_pages=total_pages
+                )
+                active_vectorstore = vectorstore
+            else:
+                clear_vectorstore(VECTORSTORE_DIR)
+                active_vectorstore = None
+        else:
+            # Incremental addition to existing active vectorstore
+            if new_chunks_to_add:
+                emb = get_cached_embeddings()
+                if emb is None:
+                    raise RuntimeError("Failed to initialize HuggingFace embedding model.")
+                active_vectorstore.add_documents(new_chunks_to_add)
+
+                existing_meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
+                current_indexed_set = set(existing_meta.get("indexed_documents", []))
+                current_indexed_set.update(successfully_indexed)
+                ready_doc_names = sorted(list(current_indexed_set))
+                total_chunks = existing_meta.get("total_chunks", 0) + len(new_chunks_to_add)
+                total_pages = sum(d.get("pages", 0) for d in doc_info_map.values())
+
+                save_vectorstore(
+                    vectorstore=active_vectorstore,
+                    folder_path=VECTORSTORE_DIR,
+                    doc_names=ready_doc_names,
+                    total_chunks=total_chunks,
+                    documents_info=list(doc_info_map.values()),
+                    total_pages=total_pages
+                )
+
+        # Clear retrieval and response caches
+        clear_bm25_cache()
+        clear_search_cache()
+        clear_rag_response_cache()
+        clear_verification_cache()
+        if hasattr(_CROSS_ENCODER, "clear_cache"):
+            _CROSS_ENCODER.clear_cache()
+
+        elapsed_sec = round(time.perf_counter() - t_start, 2)
+        ready_list = [d["filename"] for d in doc_info_map.values() if d.get("status") == "Ready"]
+        total_ready_chunks = sum(d.get("chunks", 0) for d in doc_info_map.values() if d.get("status") == "Ready")
+        total_all_pages = sum(d.get("pages", 0) for d in doc_info_map.values())
+
+        meta["documents_info"] = list(doc_info_map.values())
+        meta["indexed_documents"] = ready_list
+        meta["total_chunks"] = total_ready_chunks
+        meta["total_pages"] = total_all_pages
+        meta["total_documents"] = len(doc_info_map)
+        meta["total_indexed"] = len(ready_list)
+        meta["total_pending"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Pending")
+        meta["total_error"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Error")
+        _save_metadata_dict(VECTORSTORE_DIR, meta)
+
+        msg = f"{len(successfully_indexed)} document(s) indexed successfully."
+        if failed_docs:
+            msg += f" ({len(failed_docs)} document(s) failed)."
+
+        success_flag = len(successfully_indexed) > 0 or not failed_docs
+
+        if job_record:
+            job_record["status"] = "ready" if success_flag else "error"
+            job_record["stage"] = "completed" if success_flag else "failed"
+            job_record["progress"] = 100
+            job_record["indexed_count"] = len(successfully_indexed)
+            job_record["failed_count"] = len(failed_docs)
+            job_record["failed_details"] = failed_docs
+            if failed_docs:
+                job_record["error"] = "; ".join(f"{f['filename']}: {f['error']}" for f in failed_docs)
+            job_record["message"] = msg
+            job_record["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            _save_indexing_job(job_record)
+
+        return {
+            "success": success_flag,
+            "message": msg,
+            "indexed_count": len(successfully_indexed),
+            "failed_count": len(failed_docs),
+            "documents": len(ready_list),
+            "pages": total_all_pages,
+            "chunks": total_ready_chunks,
+            "failed_details": failed_docs,
+            "elapsed_seconds": elapsed_sec,
+            "status": build_system_status_payload()
+        }
+
+    except Exception as top_err:
+        logger.error(f"[INDEX_CORE] Fatal error during indexing: {top_err}", exc_info=True)
+        for fname in to_index:
+            if doc_info_map.get(fname, {}).get("status") in ("Indexing", "Ready"):
+                doc_info_map[fname]["status"] = "Error"
+                doc_info_map[fname]["error_message"] = str(top_err)
+        meta["documents_info"] = list(doc_info_map.values())
+        meta["total_pending"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Pending")
+        meta["total_error"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Error")
+        _save_metadata_dict(VECTORSTORE_DIR, meta)
+
+        if job_record:
+            job_record["status"] = "error"
+            job_record["stage"] = "failed"
+            job_record["progress"] = 100
+            job_record["error"] = str(top_err)
+            job_record["message"] = f"Indexing failed: {str(top_err)}"
+            job_record["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            _save_indexing_job(job_record)
+
+        return {
+            "success": False,
+            "error": f"Indexing failed: {str(top_err)}",
+            "status": build_system_status_payload()
+        }
+
+
+def _run_indexing_worker_thread(job_id: str, to_index: List[str], is_rebuild: bool):
+    """Background worker thread executing indexing operations under safe thread lock."""
+    global CURRENT_INDEXING_FILES
+    with INDEXING_LOCK:
+        CURRENT_INDEXING_FILES = set(to_index)
+        try:
+            logger.info(f"[INDEX_WORKER] Starting background job '{job_id}' for {len(to_index)} doc(s)...")
+            _execute_indexing_core(to_index, is_rebuild=is_rebuild, job_id=job_id)
+            logger.info(f"[INDEX_WORKER] Job '{job_id}' finished successfully.")
+        except Exception as e:
+            logger.error(f"[INDEX_WORKER] Unexpected fatal error in job '{job_id}': {e}", exc_info=True)
+            job_rec = ACTIVE_INDEXING_JOBS.get(job_id, {"job_id": job_id})
+            job_rec["status"] = "error"
+            job_rec["stage"] = "failed"
+            job_rec["progress"] = 100
+            job_rec["error"] = str(e)
+            job_rec["message"] = f"Indexing failed: {str(e)}"
+            job_rec["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            _save_indexing_job(job_rec)
+        finally:
+            CURRENT_INDEXING_FILES.clear()
+
+
 @app.route('/api/index', methods=['POST'])
 @app.route('/index', methods=['POST'])
 def index_documents():
     """
     Indexes Pending and Error documents:
     - Finds documents in 'Pending' or 'Error' status (or selected documents).
-    - Sets their status to 'Indexing'.
-    - Extracts PDF text, creates chunks, attaches document metadata.
-    - Adds embeddings to FAISS and updates BM25.
+    - Supports both asynchronous background execution (?async=true) and synchronous execution.
+    - Extracts PDF text, validates extractable content, creates chunks.
+    - Performs incremental vector store updates when vectorstore exists.
     - Sets status to 'Ready' on success, or 'Error' on failure.
-    - Partial Indexing: successfully indexed documents remain Ready even if some fail.
-    - Does NOT re-index documents that are already 'Ready'.
+    - Never leaves a document permanently stuck at Indexing.
     """
     global active_vectorstore
 
     data = request.get_json(silent=True) or {}
     selected_filter = data.get("selected_documents") or data.get("documents") or None
+    is_async = (
+        request.args.get("async", "").lower() in ("true", "1", "yes") or
+        data.get("async") is True
+    )
 
     meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
     doc_info_map = {d["filename"]: d for d in meta.get("documents_info", [])}
@@ -760,11 +1152,34 @@ def index_documents():
             "error": "No uploaded documents found. Please upload one or more PDFs first."
         }), 400
 
-    # Determine which documents need indexing (Pending or Error)
     to_index = []
+    normalized_selected = None
+    if selected_filter is not None and isinstance(selected_filter, (list, set, tuple)):
+        normalized_selected = set()
+        for item in selected_filter:
+            if not item:
+                continue
+            item_str = str(item).strip()
+            normalized_selected.add(item_str)
+            normalized_selected.add(os.path.basename(item_str))
+            normalized_selected.add(secure_filename(item_str))
+            normalized_selected.add(item_str.replace(" ", "_"))
+            normalized_selected.add(item_str.replace("_", " "))
+            normalized_selected.add(item_str.lower())
+            normalized_selected.add(secure_filename(item_str).lower())
+
     for fname, d in doc_info_map.items():
-        if selected_filter is not None:
-            if fname in selected_filter and d.get("status") in ("Pending", "Error", "Indexing"):
+        if normalized_selected is not None:
+            doc_id = d.get("document_id", "")
+            matches = (
+                fname in normalized_selected or
+                fname.lower() in normalized_selected or
+                doc_id in normalized_selected or
+                secure_filename(fname) in normalized_selected or
+                fname.replace(" ", "_") in normalized_selected or
+                fname.replace("_", " ") in normalized_selected
+            )
+            if matches and d.get("status") in ("Pending", "Error", "Indexing"):
                 to_index.append(fname)
         else:
             if d.get("status") in ("Pending", "Error", "Indexing"):
@@ -781,127 +1196,55 @@ def index_documents():
             "status": build_system_status_payload()
         })
 
-    t_start = time.perf_counter()
-    logger.info(f"[INDEX] Processing indexing for {len(to_index)} document(s): {to_index}")
+    # If async requested, return HTTP 202 promptly with job ID
+    if is_async:
+        job_id = f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        job_record = {
+            "job_id": job_id,
+            "status": "indexing",
+            "stage": "starting",
+            "progress": 5,
+            "message": f"Queued indexing for {len(to_index)} document(s)...",
+            "documents": to_index,
+            "indexed_count": 0,
+            "failed_count": 0,
+            "failed_details": [],
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        _save_indexing_job(job_record)
 
-    # Set status to Indexing
-    for fname in to_index:
-        doc_info_map[fname]["status"] = "Indexing"
-        doc_info_map[fname]["error_message"] = None
-
-    meta["documents_info"] = list(doc_info_map.values())
-    _save_metadata_dict(VECTORSTORE_DIR, meta)
-
-    successfully_indexed = []
-    failed_docs = []
-
-    for fname in to_index:
-        fpath = os.path.join(DOCUMENTS_DIR, fname)
-        try:
-            raw_docs, warnings = load_pdf_file(fpath, fname)
-            if not raw_docs:
-                raise ValueError("Could not extract any text from document (scanned or empty PDF).")
-
-            doc_pages = raw_docs[0].metadata.get("total_pages", len(raw_docs))
-            doc_chunks = split_documents(raw_docs)
-            if not doc_chunks:
-                raise ValueError("No text chunks could be generated from document.")
-
-            doc_info_map[fname]["status"] = "Ready"
-            doc_info_map[fname]["chunks"] = len(doc_chunks)
-            doc_info_map[fname]["pages"] = doc_pages
-            doc_info_map[fname]["indexed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Mark documents as Indexing in metadata immediately
+        for fname in to_index:
+            doc_info_map[fname]["status"] = "Indexing"
             doc_info_map[fname]["error_message"] = None
-            successfully_indexed.append(fname)
-            logger.info(f"[INDEX] Successfully processed {fname}: {doc_pages} pages, {len(doc_chunks)} chunks.")
+        meta["documents_info"] = list(doc_info_map.values())
+        _save_metadata_dict(VECTORSTORE_DIR, meta)
 
-        except Exception as err:
-            logger.error(f"[INDEX] Indexing failed for {fname}: {err}")
-            doc_info_map[fname]["status"] = "Error"
-            doc_info_map[fname]["chunks"] = 0
-            doc_info_map[fname]["error_message"] = str(err)
-            failed_docs.append({"filename": fname, "error": str(err)})
-
-    # Gather chunks for ALL currently Ready documents to build active FAISS vector store
-    all_ready_chunks = []
-    ready_doc_names = []
-    total_pages = 0
-
-    for fname, doc_entry in doc_info_map.items():
-        if doc_entry.get("status") == "Ready":
-            fpath = os.path.join(DOCUMENTS_DIR, fname)
-            if os.path.exists(fpath):
-                r_docs, _ = load_pdf_file(fpath, fname)
-                if r_docs:
-                    doc_chunks = split_documents(r_docs)
-                    doc_entry["chunks"] = len(doc_chunks)
-                    for c in doc_chunks:
-                        c.metadata["document_id"] = doc_entry.get("document_id", f"doc_{fname}")
-                        c.metadata["document"] = fname
-                        c.metadata["source"] = fname
-                        c.metadata["file_hash"] = doc_entry.get("file_hash", "")
-                    all_ready_chunks.extend(doc_chunks)
-                    ready_doc_names.append(fname)
-                    total_pages += doc_entry.get("pages", len(r_docs))
-
-    # Build and save FAISS index
-    if all_ready_chunks:
-        emb = get_cached_embeddings()
-        vectorstore = build_vectorstore(
-            chunks=all_ready_chunks,
-            embedding_model=emb,
-            doc_names=ready_doc_names,
-            documents_info=[doc_info_map[f] for f in ready_doc_names],
-            total_pages=total_pages
+        worker_thread = threading.Thread(
+            target=_run_indexing_worker_thread,
+            args=(job_id, to_index, False),
+            daemon=True,
+            name=f"worker_{job_id}"
         )
-        save_vectorstore(
-            vectorstore=vectorstore,
-            folder_path=VECTORSTORE_DIR,
-            doc_names=ready_doc_names,
-            total_chunks=len(all_ready_chunks),
-            documents_info=list(doc_info_map.values()),
-            total_pages=total_pages
-        )
-        active_vectorstore = vectorstore
-    else:
-        clear_vectorstore(VECTORSTORE_DIR)
-        active_vectorstore = None
+        worker_thread.start()
 
-    # Clear caches
-    clear_bm25_cache()
-    clear_search_cache()
-    clear_rag_response_cache()
-    clear_verification_cache()
-    if hasattr(_CROSS_ENCODER, "clear_cache"):
-        _CROSS_ENCODER.clear_cache()
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "status": "indexing",
+            "stage": "starting",
+            "message": f"Indexing started in background for {len(to_index)} document(s).",
+            "documents": to_index,
+            "status_payload": build_system_status_payload()
+        }), 202
 
-    elapsed_sec = round(time.perf_counter() - t_start, 2)
-    meta["documents_info"] = list(doc_info_map.values())
-    meta["indexed_documents"] = ready_doc_names
-    meta["total_chunks"] = len(all_ready_chunks)
-    meta["total_pages"] = sum(d.get("pages", 0) for d in doc_info_map.values())
-    meta["total_documents"] = len(doc_info_map)
-    meta["total_indexed"] = len(ready_doc_names)
-    meta["total_pending"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Pending")
-    meta["total_error"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Error")
-    _save_metadata_dict(VECTORSTORE_DIR, meta)
-
-    msg = f"{len(successfully_indexed)} document(s) indexed successfully."
-    if failed_docs:
-        msg += f" ({len(failed_docs)} document(s) failed)."
-
-    return jsonify({
-        "success": len(successfully_indexed) > 0 or not failed_docs,
-        "message": msg,
-        "indexed_count": len(successfully_indexed),
-        "failed_count": len(failed_docs),
-        "documents": len(ready_doc_names),
-        "pages": total_pages,
-        "chunks": len(all_ready_chunks),
-        "failed_details": failed_docs,
-        "elapsed_seconds": elapsed_sec,
-        "status": build_system_status_payload()
-    })
+    # Synchronous execution
+    with INDEXING_LOCK:
+        job_id = f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        res = _execute_indexing_core(to_index, is_rebuild=False, job_id=job_id)
+        status_code = 200 if res.get("success") else 500
+        return jsonify(res), status_code
 
 
 @app.route('/api/rebuild', methods=['POST'])
@@ -910,7 +1253,7 @@ def rebuild_index():
     """
     Clears current FAISS index & BM25 index, re-indexes ONLY documents that currently exist on disk.
     Removes stale chunks belonging to deleted documents.
-    Updates their statuses to Ready on success, or Error on failure.
+    Supports both async background mode and synchronous mode.
     """
     global active_vectorstore
 
@@ -931,107 +1274,99 @@ def rebuild_index():
             "status": build_system_status_payload()
         })
 
-    t_start = time.perf_counter()
-    logger.info(f"[REBUILD] Rebuilding FAISS vector index from scratch for {len(pdf_files)} document(s)...")
+    data = request.get_json(silent=True) or {}
+    is_async = (
+        request.args.get("async", "").lower() in ("true", "1", "yes") or
+        data.get("async") is True
+    )
 
-    meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
-    doc_info_map = {d["filename"]: d for d in meta.get("documents_info", [])}
+    if is_async:
+        job_id = f"job_rebuild_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        job_record = {
+            "job_id": job_id,
+            "status": "indexing",
+            "stage": "starting",
+            "progress": 5,
+            "message": f"Queued index rebuild for {len(pdf_files)} document(s)...",
+            "documents": pdf_files,
+            "indexed_count": 0,
+            "failed_count": 0,
+            "failed_details": [],
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        _save_indexing_job(job_record)
 
-    all_ready_chunks = []
-    ready_doc_names = []
-    total_pages = 0
-    failed_docs = []
-
-    for fname in pdf_files:
-        fpath = os.path.join(DOCUMENTS_DIR, fname)
-        f_hash = compute_file_hash(fpath)
-        doc_info_map[fname]["status"] = "Indexing"
-
-        try:
-            raw_docs, warnings = load_pdf_file(fpath, fname)
-            if not raw_docs:
-                raise ValueError("Could not extract text from document.")
-
-            doc_pages = raw_docs[0].metadata.get("total_pages", len(raw_docs))
-            doc_chunks = split_documents(raw_docs)
-            if not doc_chunks:
-                raise ValueError("No text chunks generated.")
-
-            doc_id = doc_info_map[fname].get("document_id") or f"doc_{f_hash[:12]}"
-            for c in doc_chunks:
-                c.metadata["document_id"] = doc_id
-                c.metadata["document"] = fname
-                c.metadata["source"] = fname
-                c.metadata["file_hash"] = f_hash
-
-            doc_info_map[fname]["status"] = "Ready"
-            doc_info_map[fname]["chunks"] = len(doc_chunks)
-            doc_info_map[fname]["pages"] = doc_pages
-            doc_info_map[fname]["indexed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            doc_info_map[fname]["error_message"] = None
-
-            all_ready_chunks.extend(doc_chunks)
-            ready_doc_names.append(fname)
-            total_pages += doc_pages
-
-        except Exception as err:
-            logger.error(f"[REBUILD] Error indexing {fname}: {err}")
-            doc_info_map[fname]["status"] = "Error"
-            doc_info_map[fname]["chunks"] = 0
-            doc_info_map[fname]["error_message"] = str(err)
-            failed_docs.append({"filename": fname, "error": str(err)})
-
-    # Build fresh vectorstore
-    if all_ready_chunks:
-        emb = get_cached_embeddings()
-        vectorstore = build_vectorstore(
-            chunks=all_ready_chunks,
-            embedding_model=emb,
-            doc_names=ready_doc_names,
-            documents_info=[doc_info_map[f] for f in ready_doc_names],
-            total_pages=total_pages
+        worker_thread = threading.Thread(
+            target=_run_indexing_worker_thread,
+            args=(job_id, pdf_files, True),
+            daemon=True,
+            name=f"worker_rebuild_{job_id}"
         )
-        save_vectorstore(
-            vectorstore=vectorstore,
-            folder_path=VECTORSTORE_DIR,
-            doc_names=ready_doc_names,
-            total_chunks=len(all_ready_chunks),
-            documents_info=list(doc_info_map.values()),
-            total_pages=total_pages
-        )
-        active_vectorstore = vectorstore
+        worker_thread.start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "status": "indexing",
+            "stage": "starting",
+            "message": f"Rebuilding index in background for {len(pdf_files)} document(s)...",
+            "documents": pdf_files,
+            "status_payload": build_system_status_payload()
+        }), 202
+
+    # Synchronous rebuild
+    with INDEXING_LOCK:
+        job_id = f"job_rebuild_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        res = _execute_indexing_core(pdf_files, is_rebuild=True, job_id=job_id)
+        status_code = 200 if res.get("success") else 500
+        return jsonify(res), status_code
+
+
+@app.route('/api/index/status/<job_id>', methods=['GET'])
+@app.route('/api/index/status', methods=['GET'])
+def get_indexing_status(job_id=None):
+    """
+    Returns the real-time status, processing stage, and progress of an indexing job.
+    """
+    jobs = _load_indexing_jobs()
+    target_job = None
+
+    if job_id:
+        target_job = jobs.get(job_id)
+        if not target_job:
+            return jsonify({
+                "success": False,
+                "error": f"Indexing job '{job_id}' not found.",
+                "status": "unknown"
+            }), 404
     else:
-        clear_vectorstore(VECTORSTORE_DIR)
-        active_vectorstore = None
-
-    # Clear all caches
-    clear_bm25_cache()
-    clear_search_cache()
-    clear_rag_response_cache()
-    clear_verification_cache()
-    if hasattr(_CROSS_ENCODER, "clear_cache"):
-        _CROSS_ENCODER.clear_cache()
-
-    elapsed_sec = round(time.perf_counter() - t_start, 2)
-    meta["documents_info"] = list(doc_info_map.values())
-    meta["indexed_documents"] = ready_doc_names
-    meta["total_chunks"] = len(all_ready_chunks)
-    meta["total_pages"] = sum(d.get("pages", 0) for d in doc_info_map.values())
-    meta["total_documents"] = len(doc_info_map)
-    meta["total_indexed"] = len(ready_doc_names)
-    meta["total_pending"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Pending")
-    meta["total_error"] = sum(1 for d in doc_info_map.values() if d.get("status") == "Error")
-    _save_metadata_dict(VECTORSTORE_DIR, meta)
+        if jobs:
+            latest_id = sorted(jobs.keys())[-1]
+            target_job = jobs[latest_id]
+        else:
+            return jsonify({
+                "success": True,
+                "status": "idle",
+                "stage": "none",
+                "progress": 100,
+                "message": "No active or recent indexing jobs found.",
+                "system_status": build_system_status_payload()
+            })
 
     return jsonify({
         "success": True,
-        "message": f"Successfully rebuilt index for {len(ready_doc_names)} document(s) ({len(all_ready_chunks)} chunks).",
-        "documents": len(ready_doc_names),
-        "pages": total_pages,
-        "chunks": len(all_ready_chunks),
-        "elapsed_seconds": elapsed_sec,
-        "failed_details": failed_docs,
-        "status": build_system_status_payload()
+        "job_id": target_job.get("job_id"),
+        "status": target_job.get("status"),
+        "stage": target_job.get("stage"),
+        "progress": target_job.get("progress", 0),
+        "message": target_job.get("message", ""),
+        "error": target_job.get("error"),
+        "indexed_count": target_job.get("indexed_count", 0),
+        "failed_count": target_job.get("failed_count", 0),
+        "failed_details": target_job.get("failed_details", []),
+        "documents": target_job.get("documents", []),
+        "system_status": build_system_status_payload()
     })
 
 

@@ -3,7 +3,7 @@ import json
 import shutil
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Set
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 
@@ -11,11 +11,12 @@ logger = logging.getLogger(__name__)
 
 import hashlib
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAG_DATA_DIR = os.environ.get("RAG_DATA_DIR", "").strip()
 if RAG_DATA_DIR:
-    DEFAULT_VECTORSTORE_DIR = os.path.join(RAG_DATA_DIR, "vectorstore")
+    DEFAULT_VECTORSTORE_DIR = os.path.abspath(os.path.join(RAG_DATA_DIR, "vectorstore"))
 else:
-    DEFAULT_VECTORSTORE_DIR = "vectorstore"
+    DEFAULT_VECTORSTORE_DIR = os.path.abspath(os.path.join(BASE_DIR, "vectorstore"))
 METADATA_FILE = "metadata.json"
 
 
@@ -101,7 +102,11 @@ def clear_vectorstore_metadata_cache():
     _METADATA_CACHE_KEY.clear()
 
 
-def load_vectorstore_metadata(folder_path: str = DEFAULT_VECTORSTORE_DIR, docs_dir: Optional[str] = None) -> Dict[str, Any]:
+def load_vectorstore_metadata(
+    folder_path: str = DEFAULT_VECTORSTORE_DIR,
+    docs_dir: Optional[str] = None,
+    active_indexing_filenames: Optional[Set[str]] = None
+) -> Dict[str, Any]:
     """
     Loads saved vectorstore metadata and synchronizes with physical files on disk.
     Utilizes in-memory caching to eliminate redundant disk reads when metadata is unchanged.
@@ -145,10 +150,18 @@ def load_vectorstore_metadata(folder_path: str = DEFAULT_VECTORSTORE_DIR, docs_d
     # Ensure documents_info items have standardized keys
     doc_info_list = data.get("documents_info", [])
     indexed_set = set(data.get("indexed_documents", []))
+    active_set = active_indexing_filenames or set()
     
     for d in doc_info_list:
         fname = d.get("filename", "")
-        if "status" not in d:
+        # Self-heal any interrupted "Indexing" state from a previously interrupted process
+        if d.get("status") == "Indexing":
+            if fname in active_set:
+                pass  # Actively running background indexing job
+            else:
+                d["status"] = "Pending"
+                d["error_message"] = "Previous indexing was interrupted. Click 'Index Documents' to retry."
+        elif "status" not in d:
             d["status"] = "Ready" if fname in indexed_set and data.get("total_chunks", 0) > 0 else "Pending"
         if "document_id" not in d:
             d["document_id"] = f"doc_{d.get('file_hash', fname)[:12]}"
