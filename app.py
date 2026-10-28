@@ -35,7 +35,7 @@ from flask import Flask, request, jsonify, render_template, send_from_directory,
 # Import RAG pipeline modules
 from rag.pdf_loader import process_multiple_pdfs, load_pdf_file, get_pdf_info
 from rag.chunker import split_documents, get_configured_chunk_settings
-from rag.embeddings import get_embedding_model
+from rag.embeddings import get_embedding_model, MODEL_CACHE_DIR
 from rag.analytics import (
     record_interaction,
     get_analytics_dashboard_data,
