@@ -35,7 +35,8 @@ analytics.db
 *.sqlite
 *.sqlite3
 test_vectorstore/
-model_cache/
+model_cache/*
+!model_cache/tokenizer.json
 scratch/
 *.tmp
 
