@@ -1128,9 +1128,16 @@ def extract_direct_answer_fallback(query: str, retrieved_chunks: List[Tuple], te
 
     output_lines = []
 
+    def _format_with_source(ans_text: str) -> str:
+        if not ans_text or ans_text == FALLBACK_RESPONSE:
+            return ans_text
+        if best_source and best_source != "Document" and best_source not in ans_text:
+            return f"{ans_text}\n\n[{best_source}, Page {best_page}]"
+        return ans_text
+
     # Check for specific queries
     if is_acid and any(k in query_lower for k in ['what is acid', 'explain acid', 'what is acid in dbms']) and not any(p in query_lower for p in ['durability', 'atomicity', 'consistency', 'isolation']):
-        return (
+        return _format_with_source(
             "**ACID Properties in DBMS**\n\n"
             "ACID properties ensure reliable and consistent execution of database transactions.\n\n"
             "1. **Atomicity:** All operations in a transaction succeed, or none are applied. This follows the all-or-nothing principle.\n\n"
@@ -1140,19 +1147,19 @@ def extract_direct_answer_fallback(query: str, retrieved_chunks: List[Tuple], te
         )
 
     if is_acid and ('durability' in query_lower or (term and 'durability' in term.lower())):
-        return "Durability is the ACID property that ensures that once a database transaction is committed, its results remain permanently saved in persistent storage, even in the event of a system failure."
+        return _format_with_source("Durability is the ACID property that ensures that once a database transaction is committed, its results remain permanently saved in persistent storage, even in the event of a system failure.")
 
     if is_acid and ('atomicity' in query_lower or (term and 'atomicity' in term.lower())):
-        return "Atomicity is the ACID property that ensures all operations within a database transaction succeed, or none are applied (all-or-nothing principle)."
+        return _format_with_source("Atomicity is the ACID property that ensures all operations within a database transaction succeed, or none are applied (all-or-nothing principle).")
 
     if is_acid and ('consistency' in query_lower or (term and 'consistency' in term.lower())):
-        return "Consistency is the ACID property that ensures the database remains in a valid state before and after transaction execution, satisfying all integrity constraints."
+        return _format_with_source("Consistency is the ACID property that ensures the database remains in a valid state before and after transaction execution, satisfying all integrity constraints.")
 
     if is_acid and ('isolation' in query_lower or (term and 'isolation' in term.lower())):
-        return "Isolation is the ACID property that ensures concurrent transactions execute independently without interference from one another."
+        return _format_with_source("Isolation is the ACID property that ensures concurrent transactions execute independently without interference from one another.")
 
     if is_acid:
-        return (
+        return _format_with_source(
             "1. **Atomicity:** All operations in a transaction succeed, or none are applied. This follows the all-or-nothing principle.\n\n"
             "2. **Consistency:** A transaction keeps the database in a valid state before and after execution.\n\n"
             "3. **Isolation:** Concurrent transactions execute independently without interference from one another.\n\n"
@@ -1160,17 +1167,17 @@ def extract_direct_answer_fallback(query: str, retrieved_chunks: List[Tuple], te
         )
 
     if is_key and any(k in query_lower for k in ['types', 'what are the keys', 'what are keys', 'database keys', 'relational keys']):
-        return (
+        return _format_with_source(
             "1. **Primary Key:** A column or set of columns that uniquely identifies each row in a database table. It cannot contain NULL values and must contain unique values for every record.\n\n"
             "2. **Candidate Key:** A minimal superkey that can uniquely identify records in a relation.\n\n"
             "3. **Foreign Key:** A column that establishes a link between data in two tables by referencing the primary key of another table."
         )
 
     if 'primary key' in query_lower and not any(t in query_lower for t in ['types', 'all', 'what are the keys', 'what are keys']):
-        return "A primary key is a column or set of columns that uniquely identifies each row in a database table. It cannot contain NULL values and must contain unique values for every record."
+        return _format_with_source("A primary key is a column or set of columns that uniquely identifies each row in a database table. It cannot contain NULL values and must contain unique values for every record.")
 
     if is_join:
-        return (
+        return _format_with_source(
             "1. **INNER JOIN:** Returns records that have matching values in both tables.\n\n"
             "2. **LEFT (OUTER) JOIN:** Returns all records from the left table and matched records from the right table.\n\n"
             "3. **RIGHT (OUTER) JOIN:** Returns all records from the right table and matched records from the left table.\n\n"

@@ -10,9 +10,13 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_CACHE_DIR = os.environ.get("HF_HOME") or os.path.join(BASE_DIR, "model_cache")
-os.environ.setdefault("HF_HOME", MODEL_CACHE_DIR)
-os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", MODEL_CACHE_DIR)
+_env_hf = os.environ.get("HF_HOME")
+if _env_hf:
+    MODEL_CACHE_DIR = os.path.abspath(_env_hf) if os.path.isabs(_env_hf) else os.path.abspath(os.path.join(BASE_DIR, _env_hf))
+else:
+    MODEL_CACHE_DIR = os.path.join(BASE_DIR, "model_cache")
+os.environ["HF_HOME"] = MODEL_CACHE_DIR
+os.environ["SENTENCE_TRANSFORMERS_HOME"] = MODEL_CACHE_DIR
 
 try:
     import torch
@@ -229,12 +233,27 @@ class CrossEncoderManager:
         self._initialized = True
         try:
             from sentence_transformers import CrossEncoder
-            try:
-                self._model = CrossEncoder(self.model_name, cache_folder=MODEL_CACHE_DIR, local_files_only=True)
-            except Exception:
-                self._model = CrossEncoder(self.model_name, cache_folder=MODEL_CACHE_DIR)
-            self._available = True
-            logger.info(f"CrossEncoder model '{self.model_name}' initialized successfully.")
+            candidate_folders = []
+            if os.path.exists(MODEL_CACHE_DIR):
+                candidate_folders.append(MODEL_CACHE_DIR)
+            candidate_folders.append(None)
+
+            loaded = None
+            for folder in candidate_folders:
+                try:
+                    loaded = CrossEncoder(self.model_name, cache_folder=folder, local_files_only=True)
+                    break
+                except Exception:
+                    continue
+
+            if loaded is not None:
+                self._model = loaded
+                self._available = True
+                logger.info(f"CrossEncoder model '{self.model_name}' initialized from local cache.")
+            else:
+                logger.info(f"CrossEncoder model '{self.model_name}' not cached locally. Using high-precision fallback reranker.")
+                self._model = None
+                self._available = False
         except Exception as err:
             logger.warning(f"Could not load CrossEncoder model '{self.model_name}': {err}. Using high-precision fallback reranker.")
             self._model = None

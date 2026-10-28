@@ -150,17 +150,17 @@ def load_vectorstore_metadata(
     # Ensure documents_info items have standardized keys
     doc_info_list = data.get("documents_info", [])
     indexed_set = set(data.get("indexed_documents", []))
-    active_set = active_indexing_filenames or set()
+    modified_self_heal = False
     
     for d in doc_info_list:
         fname = d.get("filename", "")
         # Self-heal any interrupted "Indexing" state from a previously interrupted process
         if d.get("status") == "Indexing":
-            if fname in active_set:
-                pass  # Actively running background indexing job
-            else:
+            active_set = active_indexing_filenames if active_indexing_filenames is not None else set()
+            if fname not in active_set:
                 d["status"] = "Pending"
-                d["error_message"] = "Previous indexing was interrupted. Click 'Index Documents' to retry."
+                d["error_message"] = "Previous indexing was interrupted (server restart or timeout). Click 'Index Documents' to retry."
+                modified_self_heal = True
         elif "status" not in d:
             d["status"] = "Ready" if fname in indexed_set and data.get("total_chunks", 0) > 0 else "Pending"
         if "document_id" not in d:
@@ -179,7 +179,10 @@ def load_vectorstore_metadata(
     # Sync with physical documents directory: prune metadata for any documents deleted from disk
     if docs_dir and os.path.exists(docs_dir):
         disk_files = set(f for f in sorted(os.listdir(docs_dir)) if f.lower().endswith('.pdf'))
+        before_len = len(doc_info_list)
         doc_info_list = [d for d in doc_info_list if d.get("filename") in disk_files]
+        if len(doc_info_list) != before_len:
+            modified_self_heal = True
 
     # Recompute summary statistics
     if doc_info_list:
@@ -196,6 +199,9 @@ def load_vectorstore_metadata(
         indexed = data.get("indexed_documents", [])
         data["total_documents"] = data.get("total_documents") or len(indexed)
         data["total_indexed"] = data.get("total_indexed") or len(indexed)
+
+    if modified_self_heal:
+        _save_metadata_dict(folder_path, data)
 
     # Store in memory cache
     _METADATA_CACHE[cache_id] = dict(data)

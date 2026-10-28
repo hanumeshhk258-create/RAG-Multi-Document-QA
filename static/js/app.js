@@ -481,14 +481,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: formData
             });
 
-            let data;
+            const responseText = await response.text();
+            let data = null;
             try {
-                data = await response.json();
-            } catch (jsonErr) {
-                const text = await response.text().catch(() => '');
-                throw new Error(response.status === 502 
-                    ? 'Server temporarily unavailable (502 Bad Gateway). Please retry in a moment.' 
-                    : `Server returned HTTP ${response.status}: ${text.slice(0, 120) || response.statusText}`);
+                data = JSON.parse(responseText);
+            } catch (_) {}
+
+            if (response.status === 502) {
+                showAlert('Server temporarily unavailable (HTTP 502 Bad Gateway). Please retry in a moment.', 'error');
+                return;
+            }
+
+            if (!response.ok) {
+                const errMsg = (data && (data.error || data.message))
+                    ? (data.error || data.message)
+                    : `Upload failed (Server HTTP ${response.status}: ${response.statusText || 'Error'}).`;
+                showAlert(errMsg, 'error');
+                return;
+            }
+
+            if (!data) {
+                showAlert(`Server returned an unexpected response format (HTTP ${response.status}).`, 'error');
+                return;
             }
 
             if (data.is_duplicate && !replace) {
@@ -498,7 +512,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (data.success) {
                 const savedFilename = (data.files && data.files[0]) || (data.details && data.details[0] && data.details[0].filename) || file.name;
-                showAlert(replace ? `✓ Replaced '${savedFilename}' successfully. Click 'Index Documents' to process.` : `✓ Uploaded '${savedFilename}' successfully.`, 'success');
+                showAlert(replace ? `✓ Replaced '${savedFilename}' successfully. Click 'Index Documents' to process.` : `✓ Uploaded '${savedFilename}' successfully. Click 'Index Documents' to process.`, 'success');
                 selectedDocs.add(savedFilename);
                 await fetchSystemStatus();
                 btnIndex.disabled = false;
@@ -506,7 +520,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 showAlert(data.error || 'Failed to upload document.', 'error');
             }
         } catch (err) {
-            const msg = (err && err.message) ? err.message : 'Network error while uploading file.';
+            const isAbort = (err && err.name === 'AbortError');
+            const msg = isAbort
+                ? 'Upload timed out. The server took too long to respond.'
+                : ((err && err.message && !err.message.includes('fetch'))
+                    ? err.message
+                    : 'Network connection error during document upload. Please check your connection.');
             showAlert(msg, 'error');
             console.error('Upload single file error:', err);
         }
@@ -555,14 +574,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: formData
             });
 
-            let data;
+            const responseText = await response.text();
+            let data = null;
             try {
-                data = await response.json();
-            } catch (jsonErr) {
-                const text = await response.text().catch(() => '');
-                throw new Error(response.status === 502 
-                    ? 'Server temporarily unavailable (502 Bad Gateway). Please retry in a moment.' 
-                    : `Server returned HTTP ${response.status}: ${text.slice(0, 120) || response.statusText}`);
+                data = JSON.parse(responseText);
+            } catch (_) {}
+
+            if (response.status === 502) {
+                showAlert('Server temporarily unavailable (HTTP 502 Bad Gateway). Please retry in a moment.', 'error');
+                return;
+            }
+
+            if (!response.ok) {
+                const errMsg = (data && (data.error || data.message))
+                    ? (data.error || data.message)
+                    : `Upload failed (Server HTTP ${response.status}: ${response.statusText || 'Error'}).`;
+                showAlert(errMsg, 'error');
+                return;
+            }
+
+            if (!data) {
+                showAlert(`Server returned an unexpected response format (HTTP ${response.status}).`, 'error');
+                return;
             }
 
             if (data.is_duplicate && !replace) {
@@ -572,7 +605,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (data.success) {
-                showAlert(`Successfully uploaded ${data.uploaded_count} PDF document(s). Click 'Index Documents' to process.`, 'success');
+                showAlert(`✓ Successfully uploaded ${data.uploaded_count} PDF document(s). Click 'Index Documents' to process.`, 'success');
                 if (data.files) {
                     data.files.forEach(f => selectedDocs.add(f));
                 }
@@ -582,7 +615,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 showAlert(data.error || 'Failed to upload documents.', 'error');
             }
         } catch (err) {
-            const msg = (err && err.message) ? err.message : 'Network error while uploading documents.';
+            const isAbort = (err && err.name === 'AbortError');
+            const msg = isAbort
+                ? 'Upload timed out. The server took too long to respond.'
+                : ((err && err.message && !err.message.includes('fetch'))
+                    ? err.message
+                    : 'Network connection error while uploading documents. Please check your connection.');
             showAlert(msg, 'error');
             console.error('Upload error:', err);
         } finally {
@@ -610,7 +648,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!res.ok) {
                     consecutiveErrors++;
                     if (consecutiveErrors >= 5) {
-                        throw new Error(`Status polling failed with HTTP ${res.status}`);
+                        throw new Error(res.status === 502 
+                            ? 'Server temporarily unavailable during indexing (HTTP 502 Bad Gateway).' 
+                            : `Status polling failed with HTTP ${res.status}`);
                     }
                     continue;
                 }
@@ -619,7 +659,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!job || !job.success) continue;
 
                 const stage = job.stage || 'indexing';
-                const progressPct = Math.round((job.progress || 0) * 100);
+                const rawProg = job.progress || 0;
+                const progressPct = rawProg > 1 ? Math.round(rawProg) : Math.round(rawProg * 100);
                 const msg = job.message || '';
 
                 if (stage === 'extracting') {
@@ -767,7 +808,8 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (data && (data.error || data.message)) {
                 showAlert(data.error || data.message, 'error');
             } else if (!response.ok) {
-                showAlert(`Indexing failed (Server HTTP ${response.status}: ${response.statusText || 'Error'}). Please retry.`, 'error');
+                const statusMsg = response.status === 502 ? '502: Bad Gateway (Server restarted or timed out)' : `${response.status}: ${response.statusText || 'Error'}`;
+                showAlert(`Indexing failed (Server HTTP ${statusMsg}). Please retry.`, 'error');
             } else {
                 showAlert('Failed to index documents.', 'error');
             }
@@ -775,15 +817,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const isAbort = (err && err.name === 'AbortError');
             const errDetail = isAbort 
                 ? 'Request timed out. The server may still be processing in the background.'
-                : ((err && err.message) ? err.message : 'Network error during document indexing.');
+                : ((err && err.message && !err.message.includes('fetch')) 
+                    ? err.message 
+                    : 'Network connection error during document indexing. Please check your connection.');
             showAlert(`Document indexing failed: ${errDetail}`, 'error');
             console.error('Indexing error:', err);
         } finally {
             isProcessing = false;
-            await fetchSystemStatus();
             btnIndex.disabled = false;
             btnRebuild.disabled = false;
             btnIndexText.textContent = 'Index Documents';
+            try {
+                await fetchSystemStatus();
+            } catch (statusErr) {
+                setTimeout(() => { fetchSystemStatus().catch(() => {}); }, 2000);
+            }
         }
     }
 
@@ -3603,7 +3651,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (err) {
             console.error('Status sync error:', err);
-            setSystemStatusBadge('empty', '🔴 Offline');
+            const is502 = (err && err.message && err.message.includes('502'));
+            setSystemStatusBadge('empty', is502 ? '🔴 Server Unavailable (502)' : '🔴 Offline');
             updatePillStatus('pill-hybrid', false, 'Hybrid Search');
             updatePillStatus('pill-faiss', false, 'FAISS Dense');
             updatePillStatus('pill-bm25', false, 'BM25 Sparse');

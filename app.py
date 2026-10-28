@@ -196,6 +196,17 @@ def get_currently_indexing_files() -> Set[str]:
     return set(CURRENT_INDEXING_FILES)
 
 
+def heal_interrupted_documents_on_startup():
+    """Recovers any documents stuck in 'Indexing' from a prior process crash or restart."""
+    try:
+        load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR, active_indexing_filenames=set())
+        logger.info("[STARTUP] Document states checked and synchronized.")
+    except Exception as e:
+        logger.warning(f"[STARTUP] Notice during document state check: {e}")
+
+heal_interrupted_documents_on_startup()
+
+
 def clear_search_cache():
     """Clears the in-memory document search results cache."""
     global DOCUMENT_SEARCH_CACHE
@@ -378,18 +389,8 @@ def get_cached_embeddings():
     return embedding_model
 
 
-import threading
-
-def _prewarm_models_background():
-    """Pre-warms the embedding model in a background thread after server startup to prevent port-binding starvation."""
-    try:
-        time.sleep(4)
-        get_cached_embeddings()
-        logger.info("[STARTUP] Pre-warmed HuggingFace embedding model into memory.")
-    except Exception as e:
-        logger.warning(f"[STARTUP] Notice during embedding model pre-warm: {e}")
-
-threading.Thread(target=_prewarm_models_background, daemon=True).start()
+# Embedding model is initialized lazily upon first indexing/retrieval request
+# to ensure near-instantaneous container boot, immediate port binding, and rock-solid health checks.
 
 
 def get_active_vectorstore():
@@ -674,7 +675,15 @@ def upload_files():
             request.args.get("replace", "").strip().lower() in ("true", "1", "yes")
         )
 
-        meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
+        t_upload_start = time.perf_counter()
+        req_id = f"upl_{uuid.uuid4().hex[:8]}"
+        logger.info(f"[UPLOAD] [{req_id}] Processing upload request with {len(files)} file(s)...")
+
+        meta = load_vectorstore_metadata(
+            VECTORSTORE_DIR,
+            docs_dir=DOCUMENTS_DIR,
+            active_indexing_filenames=get_currently_indexing_files()
+        )
         doc_info_map = {d["filename"]: d for d in meta.get("documents_info", [])}
 
         saved_files = []
@@ -794,6 +803,9 @@ def upload_files():
         except Exception as se:
             logger.warning(f"Failed to generate status payload: {se}")
             status_payload = {}
+
+        elapsed_ms = round((time.perf_counter() - t_upload_start) * 1000, 1)
+        logger.info(f"[UPLOAD] [{req_id}] Completed: {len(saved_files)} saved, {len(errors)} errors in {elapsed_ms}ms.")
 
         return jsonify({
             "success": True,
@@ -1101,7 +1113,7 @@ def _run_indexing_worker_thread(job_id: str, to_index: List[str], is_rebuild: bo
     """Background worker thread executing indexing operations under safe thread lock."""
     global CURRENT_INDEXING_FILES
     with INDEXING_LOCK:
-        CURRENT_INDEXING_FILES = set(to_index)
+        CURRENT_INDEXING_FILES.update(to_index)
         try:
             logger.info(f"[INDEX_WORKER] Starting background job '{job_id}' for {len(to_index)} doc(s)...")
             _execute_indexing_core(to_index, is_rebuild=is_rebuild, job_id=job_id)
@@ -1116,8 +1128,27 @@ def _run_indexing_worker_thread(job_id: str, to_index: List[str], is_rebuild: bo
             job_rec["message"] = f"Indexing failed: {str(e)}"
             job_rec["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             _save_indexing_job(job_rec)
+
+            # Ensure metadata never leaves documents stuck in Indexing
+            try:
+                meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
+                d_map = {d["filename"]: d for d in meta.get("documents_info", [])}
+                changed = False
+                for fn in to_index:
+                    if fn in d_map and d_map[fn].get("status") in ("Indexing", "Pending"):
+                        d_map[fn]["status"] = "Error"
+                        d_map[fn]["error_message"] = str(e)
+                        changed = True
+                if changed:
+                    meta["documents_info"] = list(d_map.values())
+                    _save_metadata_dict(VECTORSTORE_DIR, meta)
+            except Exception as meta_err:
+                logger.error(f"Failed to update document error states: {meta_err}")
         finally:
-            CURRENT_INDEXING_FILES.clear()
+            for fn in to_index:
+                CURRENT_INDEXING_FILES.discard(fn)
+            import gc
+            gc.collect()
 
 
 @app.route('/api/index', methods=['POST'])
@@ -1141,7 +1172,11 @@ def index_documents():
         data.get("async") is True
     )
 
-    meta = load_vectorstore_metadata(VECTORSTORE_DIR, docs_dir=DOCUMENTS_DIR)
+    meta = load_vectorstore_metadata(
+        VECTORSTORE_DIR,
+        docs_dir=DOCUMENTS_DIR,
+        active_indexing_filenames=get_currently_indexing_files()
+    )
     doc_info_map = {d["filename"]: d for d in meta.get("documents_info", [])}
 
     if not doc_info_map:
@@ -1213,6 +1248,7 @@ def index_documents():
         _save_indexing_job(job_record)
 
         # Mark documents as Indexing in metadata immediately
+        CURRENT_INDEXING_FILES.update(to_index)
         for fname in to_index:
             doc_info_map[fname]["status"] = "Indexing"
             doc_info_map[fname]["error_message"] = None
@@ -1294,6 +1330,7 @@ def rebuild_index():
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         _save_indexing_job(job_record)
+        CURRENT_INDEXING_FILES.update(pdf_files)
 
         worker_thread = threading.Thread(
             target=_run_indexing_worker_thread,

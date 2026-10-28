@@ -9,13 +9,17 @@ services:
     runtime: python
     region: oregon
     plan: free
-    buildCommand: pip install -r requirements.txt && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+    buildCommand: pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt && python -c "import os; os.makedirs('model_cache', exist_ok=True); os.environ['HF_HOME']=os.path.abspath('model_cache'); os.environ['SENTENCE_TRANSFORMERS_HOME']=os.path.abspath('model_cache'); from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder=os.path.abspath('model_cache'))"
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 180
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.12
+      - key: HF_HOME
+        value: ./model_cache
+      - key: SENTENCE_TRANSFORMERS_HOME
+        value: ./model_cache
       - key: OMP_NUM_THREADS
         value: "1"
       - key: MKL_NUM_THREADS
