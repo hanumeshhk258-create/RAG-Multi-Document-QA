@@ -2965,11 +2965,21 @@ def clear_caches_endpoint():
 def health_endpoint():
     """Lightweight, safe health check endpoint for Render and external container monitors without leaking secrets."""
     api_key = load_gemini_api_key()
+    rss_mb = 0.0
+    try:
+        import psutil
+        rss_mb = round(psutil.Process().memory_info().rss / 1024 / 1024, 2)
+    except Exception:
+        pass
+    onnx_exists = os.path.exists(os.path.join(MODEL_CACHE_DIR, "model.onnx"))
     return jsonify({
         "status": "healthy",
         "service": "intelligent-document-rag",
         "gemini_configured": is_valid_api_key_format(api_key),
-        "vectorstore_ready": active_vectorstore is not None or os.path.exists(os.path.join(VECTORSTORE_DIR, "index.faiss"))
+        "vectorstore_ready": active_vectorstore is not None or os.path.exists(os.path.join(VECTORSTORE_DIR, "index.faiss")),
+        "memory_rss_mb": rss_mb,
+        "onnx_cached": onnx_exists,
+        "version": "v2_onnx"
     }), 200
 
 

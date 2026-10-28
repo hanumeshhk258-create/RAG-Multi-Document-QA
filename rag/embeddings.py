@@ -170,8 +170,12 @@ def get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
             else:
                 logger.info("ONNX weights not found locally. Fetching 'model.onnx' (~90MB)...")
                 import urllib.request
+                import socket
+                socket.setdefaulttimeout(60)
                 url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
-                urllib.request.urlretrieve(url, onnx_model_path)
+                tmp_path = onnx_model_path + ".tmp"
+                urllib.request.urlretrieve(url, tmp_path)
+                os.replace(tmp_path, onnx_model_path)
                 return FastOnnxEmbeddings(onnx_model_path, onnx_tokenizer_path)
         except Exception as onnx_err:
             logger.info(f"FastOnnxEmbeddings unavailable ({onnx_err}), using HuggingFaceEmbeddings.")
