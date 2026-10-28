@@ -1,0 +1,76 @@
+# =============================================================================
+# Vercel Deployment Exclusion Rules (.vercelignore)
+# Prevents bundling private PDFs, secrets, caches, and development artifacts.
+# =============================================================================
+
+# Secrets & Environment Configurations
+.env
+*.env
+.env.*
+!.env.example
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.log
+
+# Sensitive Documents & Uploads (Excludes user files & personal bus passes)
+documents/*
+!documents/.gitkeep
+
+# Local Vectorstore Indexes & Data
+vectorstore/*
+!vectorstore/.gitkeep
+test_vectorstore/
+
+# Local SQLite Databases
+analytics.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Scratch & Temporary Testing Scripts
+scratch/
+tests/
+test_*.py
+audit_*.py
+debug_*.py
+check_*.py
+run_*.py
+create_sample_pdfs.py
+create_table_pdf.py
+
+# Model Cache Directories (Keep tokenizer.json for FastOnnxEmbeddings)
+model_cache/hub/
+model_cache/models--*
+model_cache/xet/
+model_cache/.locks/
+model_cache/model.onnx
+model_cache/*.log
+model_cache/CACHEDIR.TAG
+model_cache/.agent_harnesses.json
+
+# Evaluation & Benchmark Outputs
+baseline_results.json
+benchmark_results.json
+evaluation_report.csv
+evaluation_results.json
+optimized_results.json
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+

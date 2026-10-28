@@ -124,6 +124,9 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 # Persistent Data Directory Configuration (supports Render Persistent Disks via RAG_DATA_DIR)
 RAG_DATA_DIR = os.environ.get("RAG_DATA_DIR", "").strip()
+if os.environ.get("VERCEL") and not RAG_DATA_DIR:
+    RAG_DATA_DIR = "/tmp/rag_data"
+
 if RAG_DATA_DIR:
     os.makedirs(RAG_DATA_DIR, exist_ok=True)
     DOCUMENTS_DIR = os.path.join(RAG_DATA_DIR, "documents")
@@ -132,8 +135,11 @@ else:
     DOCUMENTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "documents"))
     VECTORSTORE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "vectorstore"))
 
-os.makedirs(DOCUMENTS_DIR, exist_ok=True)
-os.makedirs(VECTORSTORE_DIR, exist_ok=True)
+try:
+    os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+    os.makedirs(VECTORSTORE_DIR, exist_ok=True)
+except Exception:
+    pass
 
 # Global in-memory caches
 embedding_model = None
@@ -172,7 +178,7 @@ def _load_indexing_jobs() -> Dict[str, Dict[str, Any]]:
 
 
 def _save_indexing_job(job_data: Dict[str, Any]):
-    """Persists job status update to memory and disk safely."""
+    """Persists job status update to memory, disk, and Supabase safely."""
     global ACTIVE_INDEXING_JOBS
     job_id = job_data.get("job_id")
     if not job_id:
@@ -182,6 +188,15 @@ def _save_indexing_job(job_data: Dict[str, Any]):
         keys = sorted(ACTIVE_INDEXING_JOBS.keys())
         for k in keys[:-25]:
             ACTIVE_INDEXING_JOBS.pop(k, None)
+
+    # Persist to Supabase if configured
+    try:
+        from rag.supabase_client import is_supabase_configured, db_save_indexing_job
+        if is_supabase_configured():
+            db_save_indexing_job(job_data)
+    except Exception:
+        pass
+
     jobs_file = os.path.join(VECTORSTORE_DIR, "indexing_jobs.json")
     try:
         os.makedirs(VECTORSTORE_DIR, exist_ok=True)
@@ -584,6 +599,16 @@ def serve_pdf_document(filename):
         if os.path.exists(alt_path):
             safe_name = raw_name
         else:
+            # Check Supabase Storage if configured
+            try:
+                from rag.supabase_client import is_supabase_configured, download_pdf_bytes
+                if is_supabase_configured():
+                    pdf_bytes = download_pdf_bytes(safe_name) or download_pdf_bytes(raw_name)
+                    if pdf_bytes:
+                        return Response(pdf_bytes, mimetype='application/pdf')
+            except Exception:
+                pass
+
             logger.warning(f"PDF requested but not found: {filename}")
             return jsonify({
                 "error": "PDF file is no longer available.",
@@ -666,6 +691,15 @@ def upload_files():
         if 'files' not in request.files:
             return jsonify({"success": False, "error": "No files found in upload request."}), 400
 
+        if os.environ.get("VERCEL") and not os.environ.get("ALLOW_LOCAL_FALLBACK"):
+            from rag.supabase_client import is_supabase_configured
+            if not is_supabase_configured():
+                logger.error("[UPLOAD] Upload blocked: Supabase persistent cloud storage is not configured in this Vercel deployment.")
+                return jsonify({
+                    "success": False,
+                    "error": "Persistent cloud storage is not configured in this Vercel deployment. Please set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and DATABASE_URL in Vercel Project Settings."
+                }), 503
+
         files = request.files.getlist('files')
         if not files or all(f.filename == '' for f in files):
             return jsonify({"success": False, "error": "No files selected."}), 400
@@ -745,6 +779,14 @@ def upload_files():
                 # Save file to disk
                 with open(file_path, "wb") as f_out:
                     f_out.write(file_bytes)
+
+                # Persist to Supabase Storage if configured
+                try:
+                    from rag.supabase_client import is_supabase_configured, upload_pdf_bytes
+                    if is_supabase_configured():
+                        upload_pdf_bytes(filename, file_bytes)
+                except Exception as s_err:
+                    logger.warning(f"Supabase storage upload notice: {s_err}")
 
                 # Validate PDF readability
                 info = get_pdf_info(file_path, filename)
@@ -1229,6 +1271,23 @@ def index_documents():
             "status": build_system_status_payload()
         })
 
+    # If running in serverless environment (e.g. Vercel), execute synchronously to prevent daemon thread freezing
+    is_serverless = bool(os.environ.get("VERCEL") or os.environ.get("SERVERLESS"))
+    if is_serverless:
+        with INDEXING_LOCK:
+            job_id = f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+            res = _execute_indexing_core(to_index, is_rebuild=False, job_id=job_id)
+            return jsonify({
+                "success": res.get("success", True),
+                "job_id": job_id,
+                "status": "ready",
+                "stage": "completed",
+                "message": res.get("message", f"{len(to_index)} document(s) indexed successfully."),
+                "documents": to_index,
+                "indexed_count": res.get("indexed_count", len(to_index)),
+                "status_payload": build_system_status_payload()
+            }), (200 if res.get("success") else 500)
+
     # If async requested, return HTTP 202 promptly with job ID
     if is_async:
         job_id = f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
@@ -1314,6 +1373,22 @@ def rebuild_index():
         data.get("async") is True
     )
 
+    is_serverless = bool(os.environ.get("VERCEL") or os.environ.get("SERVERLESS"))
+    if is_serverless:
+        with INDEXING_LOCK:
+            job_id = f"job_rebuild_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+            res = _execute_indexing_core(pdf_files, is_rebuild=True, job_id=job_id)
+            return jsonify({
+                "success": res.get("success", True),
+                "job_id": job_id,
+                "status": "ready",
+                "stage": "completed",
+                "message": res.get("message", "Index rebuild completed."),
+                "documents": pdf_files,
+                "indexed_count": res.get("indexed_count", len(pdf_files)),
+                "status_payload": build_system_status_payload()
+            }), (200 if res.get("success") else 500)
+
     if is_async:
         job_id = f"job_rebuild_{int(time.time())}_{uuid.uuid4().hex[:8]}"
         job_record = {
@@ -1369,6 +1444,14 @@ def get_indexing_status(job_id=None):
 
     if job_id:
         target_job = jobs.get(job_id)
+        if not target_job:
+            try:
+                from rag.supabase_client import is_supabase_configured, db_get_indexing_job
+                if is_supabase_configured():
+                    target_job = db_get_indexing_job(job_id)
+            except Exception:
+                pass
+
         if not target_job:
             return jsonify({
                 "success": False,
@@ -1518,6 +1601,14 @@ def remove_document(doc_id=None):
                     storage_file_removed = True
                 except Exception as file_err:
                     logger.warning(f"[DELETE] Warning removing physical file {file_path}: {file_err}")
+
+        # Delete from Supabase Storage and Postgres if configured
+        try:
+            from rag.supabase_client import is_supabase_configured, db_delete_document
+            if is_supabase_configured():
+                db_delete_document(actual_filename, doc_unique_id)
+        except Exception as sb_del_err:
+            logger.warning(f"[DELETE] Supabase deletion notice: {sb_del_err}")
 
         # Step B: Remove document from metadata registry
         remaining_doc_info = [d for d in doc_info_list if d.get("filename") != actual_filename and d.get("document_id") != doc_unique_id]
@@ -2972,11 +3063,28 @@ def health_endpoint():
     except Exception:
         pass
     onnx_exists = os.path.exists(os.path.join(MODEL_CACHE_DIR, "model.onnx"))
+    storage_type = "local"
+    try:
+        from rag.supabase_client import is_supabase_configured
+        if is_supabase_configured():
+            storage_type = "supabase"
+        elif os.environ.get("VERCEL") and not os.environ.get("ALLOW_LOCAL_FALLBACK"):
+            storage_type = "unconfigured_error"
+    except Exception:
+        pass
+
+    vs_ready = (
+        active_vectorstore is not None or
+        os.path.exists(os.path.join(VECTORSTORE_DIR, "index.faiss")) or
+        (storage_type == "supabase")
+    )
+
     return jsonify({
         "status": "healthy",
         "service": "intelligent-document-rag",
         "gemini_configured": is_valid_api_key_format(api_key),
-        "vectorstore_ready": active_vectorstore is not None or os.path.exists(os.path.join(VECTORSTORE_DIR, "index.faiss")),
+        "vectorstore_ready": vs_ready,
+        "storage": storage_type,
         "memory_rss_mb": rss_mb,
         "onnx_cached": onnx_exists,
         "version": "v2_onnx"

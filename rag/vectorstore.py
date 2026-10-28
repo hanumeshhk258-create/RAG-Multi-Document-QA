@@ -115,6 +115,18 @@ def load_vectorstore_metadata(
         Dict with keys: indexed_documents, total_documents, total_indexed, total_pending,
         total_error, total_pages, total_chunks, documents_info, last_updated.
     """
+    try:
+        from rag.supabase_client import is_supabase_configured, db_load_all_metadata
+        if is_supabase_configured():
+            meta = db_load_all_metadata()
+            if active_indexing_filenames:
+                for d in meta.get("documents_info", []):
+                    if d.get("filename") in active_indexing_filenames:
+                        d["status"] = "Indexing"
+            return meta
+    except Exception as e:
+        logger.debug(f"Supabase metadata load fallback: {e}")
+
     metadata_path = os.path.join(folder_path, METADATA_FILE)
     
     # Check cache freshness via mtimes
@@ -213,6 +225,15 @@ def load_vectorstore_metadata(
 def _save_metadata_dict(folder_path: str, data: Dict[str, Any]) -> bool:
     """Directly saves metadata dictionary to metadata.json and invalidates metadata cache."""
     try:
+        from rag.supabase_client import is_supabase_configured, db_save_document_metadata
+        if is_supabase_configured():
+            for d in data.get("documents_info", []):
+                db_save_document_metadata(d)
+            return True
+    except Exception as e:
+        logger.debug(f"Supabase metadata save fallback: {e}")
+
+    try:
         clear_vectorstore_metadata_cache()
         os.makedirs(folder_path, exist_ok=True)
         metadata_path = os.path.join(folder_path, METADATA_FILE)
@@ -250,6 +271,19 @@ def build_vectorstore(
         return None
 
     try:
+        from rag.supabase_client import is_supabase_configured, db_save_chunks
+        if is_supabase_configured():
+            from rag.storage_adapter import SupabaseVectorStore
+            texts = [c.page_content for c in chunks]
+            embeddings = embedding_model.embed_documents(texts)
+            doc_id = (documents_info[0].get("document_id") if documents_info else None) or "doc_batch"
+            doc_name = (doc_names[0] if doc_names else None) or (chunks[0].metadata.get("document", "doc.pdf"))
+            db_save_chunks(document_id=doc_id, document_name=doc_name, chunks=chunks, embeddings=embeddings)
+            return SupabaseVectorStore(embedding_model=embedding_model, filter_documents=doc_names or [])
+    except Exception as se:
+        logger.warning(f"Supabase build_vectorstore fallback to local: {se}")
+
+    try:
         vectorstore = FAISS.from_documents(
             documents=chunks,
             embedding=embedding_model
@@ -283,6 +317,13 @@ def save_vectorstore(
         True if successfully saved, False otherwise.
     """
     try:
+        from rag.supabase_client import is_supabase_configured
+        if is_supabase_configured():
+            return True
+    except Exception:
+        pass
+
+    try:
         os.makedirs(folder_path, exist_ok=True)
         vectorstore.save_local(folder_path)
         
@@ -315,6 +356,16 @@ def load_vectorstore(
     Returns:
         FAISS vectorstore instance or None if not found.
     """
+    try:
+        from rag.supabase_client import is_supabase_configured
+        if is_supabase_configured():
+            from rag.storage_adapter import SupabaseVectorStore
+            meta = load_vectorstore_metadata()
+            ready_docs = meta.get("indexed_documents", [])
+            return SupabaseVectorStore(embedding_model=embedding_model, filter_documents=ready_docs)
+    except Exception as se:
+        logger.warning(f"Supabase load_vectorstore fallback to local: {se}")
+
     if not os.path.exists(folder_path):
         logger.info(f"No vector database folder found at '{folder_path}'.")
         return None
