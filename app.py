@@ -1166,7 +1166,7 @@ def index_documents():
     global active_vectorstore
 
     data = request.get_json(silent=True) or {}
-    selected_filter = data.get("selected_documents") or data.get("documents") or None
+    selected_filter = data.get("selected_documents") or data.get("documents") or data.get("files") or None
     is_async = (
         request.args.get("async", "").lower() in ("true", "1", "yes") or
         data.get("async") is True

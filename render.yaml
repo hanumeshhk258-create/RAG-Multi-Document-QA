@@ -9,7 +9,7 @@ services:
     runtime: python
     region: oregon
     plan: free
-    buildCommand: pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt && python -c "import os; os.makedirs('model_cache', exist_ok=True); os.environ['HF_HOME']=os.path.abspath('model_cache'); os.environ['SENTENCE_TRANSFORMERS_HOME']=os.path.abspath('model_cache'); from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2', cache_folder=os.path.abspath('model_cache'))"
+    buildCommand: pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt && python -c "import os, urllib.request; os.makedirs('model_cache', exist_ok=True); urllib.request.urlretrieve('https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx', 'model_cache/model.onnx'); from tokenizers import Tokenizer; Tokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2').save('model_cache/tokenizer.json')"
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 180
     healthCheckPath: /healthz
     autoDeploy: true
@@ -20,6 +20,8 @@ services:
         value: ./model_cache
       - key: SENTENCE_TRANSFORMERS_HOME
         value: ./model_cache
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       - key: OMP_NUM_THREADS
         value: "1"
       - key: MKL_NUM_THREADS
